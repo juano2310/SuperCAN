@@ -485,8 +485,8 @@ uint8_t CANMqttBroker::getRegisteredClientCount() {
   return _mappingCount;
 }
 
-void CANMqttBroker::listRegisteredClients(void (*callback)(uint8_t id, const String& serial, bool active)) {
-  if (callback == nullptr) return;
+void CANMqttBroker::listRegisteredClients(std::function<void(uint8_t id, const String& serial, bool active)> callback) {
+  if (!callback) return;
   
   for (uint8_t i = 0; i < _mappingCount; i++) {
     callback(_clientMappings[i].clientId, 

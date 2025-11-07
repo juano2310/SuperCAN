@@ -5,6 +5,7 @@
 #define CAN_MQTT_H
 
 #include <Arduino.h>
+#include <functional>
 #include "CANController.h"
 
 // Platform-specific storage includes
@@ -33,6 +34,8 @@
 #define MAX_SUBSCRIBERS_PER_TOPIC 10
 #define MAX_CLIENT_TOPICS       10
 #define MAX_MESSAGE_CALLBACKS   5
+#define MAX_CLIENT_MAPPINGS     50  // Maximum number of registered clients
+#define MAX_SERIAL_LENGTH       32  // Maximum length for serial numbers
 
 // Forward declarations
 class CANMqttBroker;
@@ -73,9 +76,6 @@ struct ClientMapping {
     return String(serialNumber);
   }
 };
-
-#define MAX_CLIENT_MAPPINGS 50  // Maximum number of registered clients
-#define MAX_SERIAL_LENGTH 32    // Maximum length for serial numbers
 
 // Storage configuration
 #define STORAGE_NAMESPACE "canmqtt"
@@ -139,7 +139,7 @@ public:
   String getSerialByClientId(uint8_t clientId);
   bool updateClientSerial(uint8_t clientId, const String& newSerial);
   uint8_t getRegisteredClientCount();
-  void listRegisteredClients(void (*callback)(uint8_t id, const String& serial, bool active));
+  void listRegisteredClients(std::function<void(uint8_t id, const String& serial, bool active)> callback);
   
   // Persistent storage management
   bool loadMappingsFromStorage();

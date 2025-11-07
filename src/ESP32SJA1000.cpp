@@ -3,9 +3,12 @@
 
 #ifdef ARDUINO_ARCH_ESP32
 
-#include "esp_intr.h"
-#include "soc/dport_reg.h"
+#include "esp_intr_alloc.h"
 #include "driver/gpio.h"
+#include "driver/periph_ctrl.h"
+#include "soc/periph_defs.h"
+#include "hal/gpio_hal.h"
+#include "soc/gpio_sig_map.h"
 
 #include "ESP32SJA1000.h"
 
@@ -53,18 +56,18 @@ int ESP32SJA1000Class::begin(long baudRate)
 
   _loopback = false;
 
-  DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_CAN_RST);
-  DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_CAN_CLK_EN);
+  periph_module_enable(PERIPH_TWAI_MODULE);
 
   // RX pin
   gpio_set_direction(_rxPin, GPIO_MODE_INPUT);
-  gpio_matrix_in(_rxPin, CAN_RX_IDX, 0);
-  gpio_pad_select_gpio(_rxPin);
+  esp_rom_gpio_connect_in_signal(GPIO_NUM_NC, TWAI_RX_IDX, 0);
+  esp_rom_gpio_connect_in_signal(_rxPin, TWAI_RX_IDX, 0);
+  esp_rom_gpio_pad_select_gpio(_rxPin);
 
   // TX pin
   gpio_set_direction(_txPin, GPIO_MODE_OUTPUT);
-  gpio_matrix_out(_txPin, CAN_TX_IDX, 0, 0);
-  gpio_pad_select_gpio(_txPin);
+  esp_rom_gpio_connect_out_signal(_txPin, TWAI_TX_IDX, 0, 0);
+  esp_rom_gpio_pad_select_gpio(_txPin);
 
   modifyRegister(REG_CDR, 0x80, 0x80); // pelican mode
   modifyRegister(REG_BTR0, 0xc0, 0x40); // SJW = 1
@@ -168,8 +171,7 @@ void ESP32SJA1000Class::end()
     _intrHandle = NULL;
   }
 
-  DPORT_SET_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_CAN_RST);
-  DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_CAN_CLK_EN);
+  periph_module_disable(PERIPH_TWAI_MODULE);
 
   CANControllerClass::end();
 }
@@ -280,7 +282,7 @@ void ESP32SJA1000Class::onReceive(void(*callback)(int))
   }
 
   if (callback) {
-    esp_intr_alloc(ETS_CAN_INTR_SOURCE, 0, ESP32SJA1000Class::onInterrupt, this, &_intrHandle);
+    esp_intr_alloc(ETS_TWAI_INTR_SOURCE, 0, ESP32SJA1000Class::onInterrupt, this, &_intrHandle);
   }
 }
 
