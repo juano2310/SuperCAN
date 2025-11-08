@@ -293,8 +293,8 @@ void listTopics() {
     return;
   }
   
-  Serial.println("Topic Name                       Hash      Subscribers");
-  Serial.println("──────────────────────────────────────────────────────");
+  Serial.println("Topic Name                     Hash      Subscribers");
+  Serial.println("────────────────────────────────────────────────────");
   
   broker.listSubscribedTopics([](uint16_t hash, const String& name, uint8_t count) {
     // Print topic name (pad to 32 chars)
@@ -415,7 +415,17 @@ void clearAllMappings() {
     if (confirm == "YES") {
       if (broker.clearStoredMappings()) {
         Serial.println("✓ All mappings cleared from flash memory");
-        Serial.println("ⓘ Broker reset to fresh state");
+        Serial.println("ⓘ Restarting...");
+        Serial.flush();
+        delay(100);
+        
+        #if defined(ESP32) || defined(ESP8266)
+          ESP.restart();
+        #else
+          // For Arduino boards, use software reset via watchdog
+          void(* resetFunc) (void) = 0; // Declare reset function at address 0
+          resetFunc(); // Call reset
+        #endif
       } else {
         Serial.println("✗ Failed to clear mappings");
       }

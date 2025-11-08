@@ -476,6 +476,8 @@ void CANPubSubBroker::sendDirectMessage(uint8_t clientId, const String& message)
   
   if (totalSize > CAN_FRAME_DATA_SIZE) {
     // Use extended message for long messages
+    // Format: [brokerID][clientID][message...]
+    // processExtendedFrame will extract brokerID as senderId from first byte
     uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
     buffer[0] = CAN_PS_BROKER_ID;
     buffer[1] = clientId;
@@ -543,10 +545,37 @@ void CANPubSubBroker::handleIdRequestWithSerial() {
   // Find or create client ID for this serial number
   uint8_t assignedId = findOrCreateClientId(serialNumber);
   
-  // Send response
+  // Check if this is a returning client (has stored subscriptions)
+  int subIndex = findStoredSubscription(assignedId);
+  bool hasStoredSubs = (subIndex >= 0 && _storedSubscriptions[subIndex].topicCount > 0);
+  
+  // Send response with flag indicating if subscriptions will be restored
   _can->beginPacket(CAN_PS_ID_RESPONSE);
   _can->write(assignedId);
+  _can->write(hasStoredSubs ? 0x01 : 0x00); // Flag: has stored subscriptions
   _can->endPacket();
+  
+  // Track connected client if not already tracked
+  bool found = false;
+  for (uint8_t i = 0; i < _clientCount; i++) {
+    if (_connectedClients[i] == assignedId) {
+      found = true;
+      break;
+    }
+  }
+  if (!found && _clientCount < 256) {
+    _connectedClients[_clientCount++] = assignedId;
+    
+    if (_onClientConnect) {
+      _onClientConnect(assignedId);
+    }
+  }
+  
+  // Restore stored subscriptions for this client (if any)
+  if (hasStoredSubs) {
+    delay(100); // Delay to let client process ID response and prepare to receive subscriptions
+    restoreClientSubscriptions(assignedId);
+  }
 }
 
 uint8_t CANPubSubBroker::findOrCreateClientId(const String& serialNumber) {
@@ -677,7 +706,9 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
   // Handle extended messages based on type
   switch (msgType) {
     case CAN_PS_ID_REQUEST: {
-      // Extended ID request with serial number (senderId is included in first byte by client)
+      // Extended ID request with serial number
+      // Note: A placeholder byte (0x00) was extracted by processExtendedFrame as "senderId"
+      // The actual serial number is in the data buffer
       String serialNumber = "";
       for (size_t i = 0; i < length; i++) {
         serialNumber += (char)data[i];
@@ -685,23 +716,51 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       
       uint8_t assignedId = findOrCreateClientId(serialNumber);
       
-      // Send response
+      // Check if this is a returning client (has stored subscriptions)
+      int subIndex = findStoredSubscription(assignedId);
+      bool hasStoredSubs = (subIndex >= 0 && _storedSubscriptions[subIndex].topicCount > 0);
+      
+      // Send response with flag indicating if subscriptions will be restored
       _can->beginPacket(CAN_PS_ID_RESPONSE);
       _can->write(assignedId);
+      _can->write(hasStoredSubs ? 0x01 : 0x00); // Flag: has stored subscriptions
       _can->endPacket();
+      
+      // Track connected client if not already tracked
+      bool found = false;
+      for (uint8_t i = 0; i < _clientCount; i++) {
+        if (_connectedClients[i] == assignedId) {
+          found = true;
+          break;
+        }
+      }
+      if (!found && _clientCount < 256) {
+        _connectedClients[_clientCount++] = assignedId;
+        
+        if (_onClientConnect) {
+          _onClientConnect(assignedId);
+        }
+      }
+      
+      // Restore stored subscriptions for this client (if any)
+      if (hasStoredSubs) {
+        delay(100); // Delay to let client process ID response and prepare to receive subscriptions
+        restoreClientSubscriptions(assignedId);
+      }
       break;
     }
     
     case CAN_PS_SUBSCRIBE: {
       // Extended subscribe with full topic name
-      // Format: [clientId][topicHash_h][topicHash_l][topic_name...]
-      if (length < 3) return;
+      // Format (in buffer): [topicHash_h][topicHash_l][topic_name...]
+      // Note: clientId was already extracted by processExtendedFrame from first byte
+      if (length < 2) return;
       
-      uint8_t clientId = data[0];
-      uint16_t topicHash = (data[1] << 8) | data[2];
+      uint8_t clientId = senderId; // Use the extracted sender ID
+      uint16_t topicHash = (data[0] << 8) | data[1];
       String topicName = "";
       
-      for (size_t i = 3; i < length; i++) {
+      for (size_t i = 2; i < length; i++) {
         topicName += (char)data[i];
       }
       
@@ -732,14 +791,14 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
     
     case CAN_PS_PUBLISH: {
       // Extended publish with long message
-      // Format: [publisherId][topicHash_h][topicHash_l][message...]
-      if (length < 3) return;
+      // Format (in buffer): [topicHash_h][topicHash_l][message...]
+      // Note: publisherId was already extracted by processExtendedFrame from first byte
+      if (length < 2) return;
       
-      uint8_t publisherId = data[0];
-      uint16_t topicHash = (data[1] << 8) | data[2];
+      uint16_t topicHash = (data[0] << 8) | data[1];
       String message = "";
       
-      for (size_t i = 3; i < length; i++) {
+      for (size_t i = 2; i < length; i++) {
         message += (char)data[i];
       }
       
@@ -754,25 +813,23 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
     }
     
     case CAN_PS_DIRECT_MSG: {
-      // Extended direct message
-      // Format: [senderId][message...]
-      if (length < 1) return;
+      // Extended direct message from client to broker
+      // Format (in buffer): [message...]
+      // Note: senderId (client ID) was already extracted by processExtendedFrame from first byte
       
-      uint8_t actualSenderId = data[0];
       String message = "";
-      
-      for (size_t i = 1; i < length; i++) {
+      for (size_t i = 0; i < length; i++) {
         message += (char)data[i];
       }
       
       if (_onDirectMessage) {
-        _onDirectMessage(actualSenderId, message);
+        _onDirectMessage(senderId, message);
       }
       
       // Send acknowledgment
       _can->beginPacket(CAN_PS_ACK);
       _can->write(CAN_PS_BROKER_ID);
-      _can->write(actualSenderId);
+      _can->write(senderId);
       _can->print("ACK");
       _can->endPacket();
       break;
@@ -890,6 +947,9 @@ void CANPubSubClient::handleMessage(int packetSize) {
     case CAN_PS_ID_RESPONSE:
       handleIdAssignment();
       break;
+    case CAN_PS_SUBSCRIBE:
+      handleSubscribeNotification();
+      break;
     case CAN_PS_TOPIC_DATA:
       handleTopicData();
       break;
@@ -909,7 +969,55 @@ void CANPubSubClient::handleIdAssignment() {
   if (_can->available() < 1) return;
   
   _clientId = _can->read();
+  
+  // Check if there's a flag indicating stored subscriptions will be restored
+  bool hasStoredSubs = false;
+  if (_can->available() > 0) {
+    hasStoredSubs = (_can->read() == 0x01);
+  }
+  
   _connected = true;
+  
+  // If subscriptions will be restored, broker will send them shortly
+  // Client just needs to wait and handle incoming SUBSCRIBE messages
+}
+
+void CANPubSubClient::handleSubscribeNotification() {
+  // Broker is notifying us about a subscription (restored from storage)
+  // Format: [clientId][topicHash_h][topicHash_l][topicNameLen][topicName]
+  if (_can->available() < 4) return;
+  
+  uint8_t clientId = _can->read();
+  if (clientId != _clientId) return;
+  
+  uint16_t topicHash = (_can->read() << 8) | _can->read();
+  uint8_t topicLen = _can->read();
+  
+  String topic = "";
+  for (uint8_t i = 0; i < topicLen && _can->available(); i++) {
+    topic += (char)_can->read();
+  }
+  
+  // Register the topic mapping locally
+  if (topic.length() > 0) {
+    registerTopic(topic);
+  }
+  
+  // Add to local subscription list
+  if (_subscribedTopicCount < MAX_CLIENT_TOPICS) {
+    // Check if already subscribed
+    bool alreadySubscribed = false;
+    for (uint8_t i = 0; i < _subscribedTopicCount; i++) {
+      if (_subscribedTopics[i] == topicHash) {
+        alreadySubscribed = true;
+        break;
+      }
+    }
+    
+    if (!alreadySubscribed) {
+      _subscribedTopics[_subscribedTopicCount++] = topicHash;
+    }
+  }
 }
 
 void CANPubSubClient::handleTopicData() {
@@ -970,7 +1078,11 @@ void CANPubSubClient::requestClientID() {
 void CANPubSubClient::requestClientIDWithSerial(const String& serialNumber) {
   // Use extended message for serial numbers > 8 bytes
   if (serialNumber.length() > CAN_FRAME_DATA_SIZE) {
-    sendExtendedMessage(CAN_PS_ID_REQUEST, (const uint8_t*)serialNumber.c_str(), serialNumber.length());
+    // Prepend a dummy byte (0x00) since processExtendedFrame will extract first byte as "senderId"
+    uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
+    buffer[0] = 0x00; // Placeholder for "senderId" field
+    memcpy(buffer + 1, serialNumber.c_str(), min(serialNumber.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 1)));
+    sendExtendedMessage(CAN_PS_ID_REQUEST, buffer, min(1 + serialNumber.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
   } else {
     _can->beginPacket(CAN_PS_ID_REQUEST);
     _can->print(serialNumber);
@@ -1147,18 +1259,59 @@ void CANPubSubClient::listSubscribedTopics(std::function<void(uint16_t hash, con
 void CANPubSubClient::onExtendedMessageComplete(uint8_t msgType, uint8_t senderId, const uint8_t* data, size_t length) {
   // Handle extended messages based on type
   switch (msgType) {
-    case CAN_PS_TOPIC_DATA: {
-      // Extended topic data
-      // Format: [targetId][topicHash_h][topicHash_l][message...]
+    case CAN_PS_SUBSCRIBE: {
+      // Extended subscribe notification from broker (restored subscription)
+      // Format (in buffer): [topicHash_h][topicHash_l][topicNameLen][topicName...]
+      // Note: clientId was already extracted by processExtendedFrame from first byte
       if (length < 3) return;
       
-      uint8_t targetId = data[0];
-      if (targetId != _clientId) return; // Not for us
+      // The senderId parameter actually contains our clientId
+      if (senderId != _clientId) return; // Not for us
       
-      uint16_t topicHash = (data[1] << 8) | data[2];
+      uint16_t topicHash = (data[0] << 8) | data[1];
+      uint8_t topicLen = data[2];
+      
+      String topic = "";
+      for (uint8_t i = 0; i < topicLen && (3 + i) < length; i++) {
+        topic += (char)data[3 + i];
+      }
+      
+      // Register the topic mapping locally
+      if (topic.length() > 0) {
+        registerTopic(topic);
+      }
+      
+      // Add to local subscription list
+      if (_subscribedTopicCount < MAX_CLIENT_TOPICS) {
+        // Check if already subscribed
+        bool alreadySubscribed = false;
+        for (uint8_t i = 0; i < _subscribedTopicCount; i++) {
+          if (_subscribedTopics[i] == topicHash) {
+            alreadySubscribed = true;
+            break;
+          }
+        }
+        
+        if (!alreadySubscribed) {
+          _subscribedTopics[_subscribedTopicCount++] = topicHash;
+        }
+      }
+      break;
+    }
+    
+    case CAN_PS_TOPIC_DATA: {
+      // Extended topic data
+      // Format (in buffer): [topicHash_h][topicHash_l][message...]
+      // Note: targetId (subscriber ID) was already extracted by processExtendedFrame from first byte
+      if (length < 2) return;
+      
+      // The senderId parameter actually contains the targetId for this message type
+      if (senderId != _clientId) return; // Not for us
+      
+      uint16_t topicHash = (data[0] << 8) | data[1];
       String message = "";
       
-      for (size_t i = 3; i < length; i++) {
+      for (size_t i = 2; i < length; i++) {
         message += (char)data[i];
       }
       
@@ -1171,21 +1324,21 @@ void CANPubSubClient::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
     
     case CAN_PS_DIRECT_MSG: {
       // Extended direct message
-      // Format: [senderId][targetId][message...]
-      if (length < 2) return;
+      // Format (in buffer): [targetId][message...]
+      // Note: senderId was already extracted by processExtendedFrame from first byte
+      if (length < 1) return;
       
-      uint8_t actualSenderId = data[0];
-      uint8_t targetId = data[1];
+      uint8_t targetId = data[0];
       
       if (targetId != _clientId) return; // Not for us
       
       String message = "";
-      for (size_t i = 2; i < length; i++) {
+      for (size_t i = 1; i < length; i++) {
         message += (char)data[i];
       }
       
       if (_onDirectMessage) {
-        _onDirectMessage(actualSenderId, message);
+        _onDirectMessage(senderId, message);
       }
       break;
     }
@@ -1360,10 +1513,41 @@ void CANPubSubBroker::restoreClientSubscriptions(uint8_t clientId) {
   int index = findStoredSubscription(clientId);
   if (index < 0) return;
   
-  // Restore each subscription
+  // Restore each subscription to broker's internal table and notify client
   for (uint8_t i = 0; i < _storedSubscriptions[index].topicCount; i++) {
     uint16_t topicHash = _storedSubscriptions[index].topics[i];
+    
+    // Add to broker's internal subscription table
     addSubscription(clientId, topicHash);
+    
+    // Send topic name back to client so it can restore its local mapping
+    // Format: [clientId][topicHash][topicName]
+    String topicName = getTopicName(topicHash);
+    
+    // Calculate message size
+    size_t totalSize = 1 + 2 + 1 + topicName.length();
+    
+    if (totalSize > CAN_FRAME_DATA_SIZE) {
+      // Use extended message for long topic names
+      uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
+      buffer[0] = clientId;
+      buffer[1] = topicHash >> 8;
+      buffer[2] = topicHash & 0xFF;
+      buffer[3] = (uint8_t)topicName.length();
+      memcpy(buffer + 4, topicName.c_str(), min(topicName.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 4)));
+      
+      sendExtendedMessage(CAN_PS_SUBSCRIBE, buffer, min(4 + topicName.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
+    } else {
+      _can->beginPacket(CAN_PS_SUBSCRIBE);
+      _can->write(clientId);
+      _can->write(topicHash >> 8);
+      _can->write(topicHash & 0xFF);
+      _can->write((uint8_t)topicName.length());
+      _can->print(topicName);
+      _can->endPacket();
+    }
+    
+    delay(15); // Small delay between messages
   }
 }
 

@@ -295,6 +295,7 @@ private:
   
   // Message handlers
   void handleIdAssignment();
+  void handleSubscribeNotification();
   void handleTopicData();
   void handleDirectMessageReceived();
   void handlePong();
