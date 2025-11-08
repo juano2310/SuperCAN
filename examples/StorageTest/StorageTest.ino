@@ -57,10 +57,12 @@ void setup() {
     Serial.println("Previously registered clients:");
     Serial.println("─────────────────────────────────────────────────");
     broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
-      Serial.print("  ID: 0x");
-      if (id < 0x10) Serial.print("0");
-      Serial.print(id, HEX);
-      Serial.print("  SN: ");
+      Serial.print("  ID: ");
+      Serial.print(id, DEC);
+      if (id < 10) Serial.print("   ");
+      else if (id < 100) Serial.print("  ");
+      else Serial.print(" ");
+      Serial.print(" SN: ");
       Serial.print(serial);
       Serial.print("  [");
       Serial.print(active ? "Active" : "Inactive");
@@ -133,9 +135,8 @@ void registerTestClient(const char* serialNumber) {
   uint8_t id = broker.registerClient(serialNumber);
   
   if (id != CAN_PS_UNASSIGNED_ID) {
-    Serial.print("OK - Assigned ID: 0x");
-    if (id < 0x10) Serial.print("0");
-    Serial.println(id, HEX);
+    Serial.print("OK - Assigned ID: ");
+    Serial.println(id, DEC);
     Serial.println("✓ Saved to flash memory");
   } else {
     Serial.println("FAILED (table full)");
@@ -154,10 +155,12 @@ void listClients() {
     Serial.println("  (none)");
   } else {
     broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
-      Serial.print("  ID: 0x");
-      if (id < 0x10) Serial.print("0");
-      Serial.print(id, HEX);
-      Serial.print("  SN: ");
+      Serial.print("  ID: ");
+      Serial.print(id, DEC);
+      if (id < 10) Serial.print("   ");
+      else if (id < 100) Serial.print("  ");
+      else Serial.print(" ");
+      Serial.print(" SN: ");
       
       // Pad serial number for alignment
       Serial.print(serial);

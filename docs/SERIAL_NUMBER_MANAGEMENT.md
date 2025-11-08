@@ -47,9 +47,9 @@ The broker maintains a table of registered clients **stored in flash memory**:
 | 0x10      | ESP32_ABC123  | Active |
 | 0x11      | NODE_001      | Active |
 | 0x12      | SENSOR_A      | Inactive |
-| 0x13      | MAC_00:1A:2B  | Active |
+| 3         | MAC_00:1A:2B  | Active |
 
-- **Client ID**: Unique 8-bit identifier (0x10-0xFE)
+- **Client ID**: Unique 8-bit identifier (starting from 1, broker is 0)
 - **Serial Number**: String identifier (MAC, UUID, custom) - max 32 chars
 - **Status**: Active (currently connected) or Inactive
 - **Storage**: Automatically saved to flash memory on each change
@@ -67,8 +67,8 @@ Manually register a client with a serial number. Returns assigned client ID.
 **Example:**
 ```cpp
 uint8_t id = broker.registerClient("ESP32_ABC123");
-Serial.print("Registered client ID: 0x");
-Serial.println(id, HEX);
+Serial.print("Registered client ID: ");
+Serial.println(id, DEC);
 ```
 
 ---
@@ -81,7 +81,7 @@ Unregister a client by ID. Marks as inactive and removes subscriptions.
 
 **Example:**
 ```cpp
-if (broker.unregisterClient(0x10)) {
+if (broker.unregisterClient(1)) {
   Serial.println("Client unregistered");
 }
 ```
@@ -113,8 +113,8 @@ Get client ID for a given serial number. Returns `CAN_PS_UNASSIGNED_ID` (0xFF) i
 ```cpp
 uint8_t id = broker.getClientIdBySerial("ESP32_ABC123");
 if (id != CAN_PS_UNASSIGNED_ID) {
-  Serial.print("Client ID: 0x");
-  Serial.println(id, HEX);
+  Serial.print("Client ID: ");
+  Serial.println(id, DEC);
 }
 ```
 
@@ -128,7 +128,7 @@ Get serial number for a given client ID. Returns empty string if not found.
 
 **Example:**
 ```cpp
-String serial = broker.getSerialByClientId(0x10);
+String serial = broker.getSerialByClientId(1);
 if (serial.length() > 0) {
   Serial.print("Serial: ");
   Serial.println(serial);
@@ -145,7 +145,7 @@ Update the serial number for a client ID. Returns false if new serial already ex
 
 **Example:**
 ```cpp
-if (broker.updateClientSerial(0x10, "NEW_SERIAL")) {
+if (broker.updateClientSerial(1, "NEW_SERIAL")) {
   Serial.println("Serial updated");
 }
 ```
@@ -175,8 +175,8 @@ Iterate through all registered clients with a callback.
 **Example:**
 ```cpp
 broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
-  Serial.print("ID: 0x");
-  Serial.print(id, HEX);
+  Serial.print("ID: ");
+  Serial.print(id, DEC);
   Serial.print(" Serial: ");
   Serial.print(serial);
   Serial.print(" Status: ");

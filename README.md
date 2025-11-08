@@ -150,8 +150,8 @@ void setup() {
   
   // Connect with serial number - same ID every time!
   if (client.begin(SERIAL_NUMBER)) {
-    Serial.print("Connected with persistent ID: 0x");
-    Serial.println(client.getClientId(), HEX);
+    Serial.print("Connected with persistent ID: ");
+    Serial.println(client.getClientId(), DEC);
     client.subscribe("sensors/temperature");
   }
 }
@@ -189,7 +189,7 @@ See the [arduino-CAN examples](https://github.com/sandeepmistry/arduino-CAN/tree
 ## Pub/Sub Protocol Features
 
 ### Broker Capabilities
-- **Automatic client ID assignment** (0x10-0xFE)
+- **Automatic client ID assignment** (starting from 1)
 - **⚡ Persistent ID management** - Serial number-based client registration
 - **💾 Flash memory storage** - Mappings survive power loss and resets
 - Topic subscription management
@@ -231,9 +231,9 @@ The pub/sub protocol can be configured by modifying constants in `CANPubSub.h`:
 ## How It Works
 
 ### Basic Connection Flow
-1. **Broker starts** and listens for client connections
+1. **Broker starts** and listens for client connections (broker is always ID 0)
 2. **Client connects** by requesting an ID from the broker
-3. **Broker assigns** a unique ID (0x10-0xFE)
+3. **Broker assigns** a unique ID (starting from 1: first client gets 1, second gets 2, etc.)
 4. **Client subscribes** to topics by sending topic hashes
 5. **Any client publishes** a message to a topic
 6. **Broker routes** the message to all subscribers

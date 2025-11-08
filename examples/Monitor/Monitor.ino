@@ -164,8 +164,8 @@ void onReceive(int packetSize) {
       
     case 0xFE: // ID_RESPONSE
       if (len >= 1) {
-        Serial.print(" - Broker assigned ID: 0x");
-        Serial.println(data[0], HEX);
+        Serial.print(" - Broker assigned ID: ");
+        Serial.println(data[0], DEC);
       }
       break;
       
@@ -180,8 +180,8 @@ void handleSubscribe(uint8_t* data, int len) {
     uint8_t clientId = data[0];
     uint16_t topicHash = (data[1] << 8) | data[2];
     
-    Serial.print(" - Client 0x");
-    Serial.print(clientId, HEX);
+    Serial.print(" - Client ");
+    Serial.print(clientId, DEC);
     Serial.print(" → Topic 0x");
     Serial.println(topicHash, HEX);
     
@@ -194,8 +194,8 @@ void handleUnsubscribe(uint8_t* data, int len) {
     uint8_t clientId = data[0];
     uint16_t topicHash = (data[1] << 8) | data[2];
     
-    Serial.print(" - Client 0x");
-    Serial.print(clientId, HEX);
+    Serial.print(" - Client ");
+    Serial.print(clientId, DEC);
     Serial.print(" × Topic 0x");
     Serial.println(topicHash, HEX);
   }
@@ -211,8 +211,8 @@ void handlePublish(uint8_t* data, int len) {
       message += (char)data[i];
     }
     
-    Serial.print(" - From 0x");
-    Serial.print(publisherId, HEX);
+    Serial.print(" - From ");
+    Serial.print(publisherId, DEC);
     Serial.print(" on 0x");
     Serial.print(topicHash, HEX);
     Serial.print(": \"");
@@ -233,8 +233,8 @@ void handleTopicData(uint8_t* data, int len) {
       message += (char)data[i];
     }
     
-    Serial.print(" - To 0x");
-    Serial.print(targetId, HEX);
+    Serial.print(" - To ");
+    Serial.print(targetId, DEC);
     Serial.print(" from 0x");
     Serial.print(topicHash, HEX);
     Serial.print(": \"");
@@ -252,8 +252,8 @@ void handleDirectMsg(uint8_t* data, int len) {
       message += (char)data[i];
     }
     
-    Serial.print(" - From 0x");
-    Serial.print(senderId, HEX);
+    Serial.print(" - From ");
+    Serial.print(senderId, DEC);
     Serial.print(": \"");
     Serial.print(message);
     Serial.println("\"");
@@ -262,24 +262,24 @@ void handleDirectMsg(uint8_t* data, int len) {
 
 void handlePing(uint8_t* data, int len) {
   if (len >= 1) {
-    Serial.print(" - From client 0x");
-    Serial.println(data[0], HEX);
+    Serial.print(" - From client ");
+    Serial.println(data[0], DEC);
   }
 }
 
 void handlePong(uint8_t* data, int len) {
   if (len >= 2) {
-    Serial.print(" - From broker to 0x");
-    Serial.println(data[1], HEX);
+    Serial.print(" - From broker to ");
+    Serial.println(data[1], DEC);
   }
 }
 
 void handleAck(uint8_t* data, int len) {
   if (len >= 2) {
-    Serial.print(" - From 0x");
-    Serial.print(data[0], HEX);
-    Serial.print(" to 0x");
-    Serial.println(data[1], HEX);
+    Serial.print(" - From ");
+    Serial.print(data[0], DEC);
+    Serial.print(" to ");
+    Serial.println(data[1], DEC);
   }
 }
 

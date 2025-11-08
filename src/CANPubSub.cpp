@@ -135,7 +135,7 @@ void CANPubSubBase::processExtendedFrame(int packetSize) {
 CANPubSubBroker::CANPubSubBroker(CANControllerClass& can) 
   : CANPubSubBase(can),
     _subTableSize(0),
-    _nextClientID(0x10),
+    _nextClientID(0x01),
     _clientCount(0),
     _mappingCount(0),
     _storedSubCount(0),
@@ -151,7 +151,7 @@ CANPubSubBroker::CANPubSubBroker(CANControllerClass& can)
 
 bool CANPubSubBroker::begin() {
   _subTableSize = 0;
-  _nextClientID = 0x10;
+  _nextClientID = 0x01;
   _clientCount = 0;
   _mappingCount = 0;
   _storedSubCount = 0;
@@ -427,7 +427,7 @@ void CANPubSubBroker::assignClientID() {
   
   _nextClientID++;
   if (_nextClientID == 0xFF) {
-    _nextClientID = 0x10; // Wrap around, skip special IDs
+    _nextClientID = 0x01; // Wrap around, skip special IDs
   }
 }
 
@@ -572,7 +572,7 @@ uint8_t CANPubSubBroker::findOrCreateClientId(const String& serialNumber) {
     // Increment for next client
     _nextClientID++;
     if (_nextClientID == 0xFF) {
-      _nextClientID = 0x10; // Wrap around, skip special IDs
+      _nextClientID = 0x01; // Wrap around, skip special IDs
     }
     
     saveMappingsToStorage(); // Save new mapping
@@ -1214,7 +1214,7 @@ bool CANPubSubBroker::loadMappingsFromStorage() {
     }
     
     _mappingCount = _preferences.getUChar("count", 0);
-    _nextClientID = _preferences.getUChar("nextID", 0x10);
+    _nextClientID = _preferences.getUChar("nextID", 0x01);
     
     if (_mappingCount > MAX_CLIENT_MAPPINGS) {
       _mappingCount = 0;
@@ -1310,7 +1310,7 @@ bool CANPubSubBroker::saveMappingsToStorage() {
 
 bool CANPubSubBroker::clearStoredMappings() {
   _mappingCount = 0;
-  _nextClientID = 0x10;
+  _nextClientID = 0x01;
   memset(_clientMappings, 0, sizeof(_clientMappings));
   
   #ifdef ESP32

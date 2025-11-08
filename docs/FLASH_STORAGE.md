@@ -224,7 +224,7 @@ client.unsubscribe("sensor/temp");     // Remove subscription
 
 // These do NOT trigger writes:
 broker.getClientIdBySerial("ESP32");   // Read only
-broker.getSerialByClientId(0x10);      // Read only
+broker.getSerialByClientId(1);         // Read only
 broker.listRegisteredClients(...);     // Read only
 broker.getSubscriptionCount();         // Read only
 ```
@@ -303,7 +303,7 @@ When a client subscribes to a topic:
 ```cpp
 // === First Boot ===
 broker.begin();
-// Client connects with serial "SENSOR_001", gets ID 0x10
+// Client connects with serial "SENSOR_001", gets ID 1 (first client)
 // Client subscribes to "temperature" and "humidity"
 // Subscriptions saved to flash automatically
 
@@ -311,11 +311,11 @@ broker.begin();
 
 // === Second Boot ===
 broker.begin();
-// Loads client mapping: "SENSOR_001" → 0x10
-// Loads subscriptions: 0x10 → ["temperature", "humidity"]
+// Loads client mapping: "SENSOR_001" → 1
+// Loads subscriptions: 1 → ["temperature", "humidity"]
 
 // Client reconnects with serial "SENSOR_001"
-// Gets same ID 0x10
+// Gets same ID 1
 // Subscriptions automatically restored!
 // Client immediately receives temperature/humidity messages
 ```
@@ -351,8 +351,8 @@ Serial.println(broker.getRegisteredClientCount()); // → 2
 
 // List them
 broker.listRegisteredClients([](uint8_t id, const String& sn, bool active) {
-  Serial.print("ID: 0x");
-  Serial.print(id, HEX);
+  Serial.print("ID: ");
+  Serial.print(id, DEC);
   Serial.print(" → ");
   Serial.println(sn);
 });

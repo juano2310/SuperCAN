@@ -93,7 +93,7 @@ void setup() {
   Serial.println("  pub:topic:msg  - Publish to topic");
   Serial.println("  msg:id:msg     - Send direct message to client");
   Serial.println("  stats          - Show statistics");
-  Serial.println("  unreg:id       - Unregister client by ID (hex)");
+  Serial.println("  unreg:id       - Unregister client by ID (decimal)");
   Serial.println("  unreg:SN       - Unregister by serial number");
   Serial.println("  find:SN        - Find client ID by serial");
   Serial.println("  clear          - Clear all stored mappings");
@@ -137,12 +137,12 @@ void loop() {
       if (colonPos > 0) {
         String idStr = input.substring(4, colonPos);
         String message = input.substring(colonPos + 1);
-        uint8_t clientId = (uint8_t)strtol(idStr.c_str(), NULL, 16);
+        uint8_t clientId = (uint8_t)idStr.toInt();
         broker.sendDirectMessage(clientId, message);
-        Serial.print("Sent direct message to client 0x");
-        Serial.println(clientId, HEX);
+        Serial.print("Sent direct message to client ");
+        Serial.println(clientId, DEC);
       } else {
-        Serial.println("Usage: msg:clientId:message (clientId in hex)");
+        Serial.println("Usage: msg:clientId:message (clientId in decimal)");
       }
       
     } else if (input.startsWith("unreg:")) {
@@ -166,8 +166,8 @@ void loop() {
 void onClientConnect(uint8_t clientId) {
   String serial = broker.getSerialByClientId(clientId);
   
-  Serial.print(">>> Client connected: 0x");
-  Serial.print(clientId, HEX);
+  Serial.print(">>> Client connected: ");
+  Serial.print(clientId, DEC);
   if (serial.length() > 0) {
     Serial.print(" (SN: ");
     Serial.print(serial);
@@ -190,8 +190,8 @@ void onPublish(uint16_t topicHash, const String& topic, const String& message) {
 void onDirectMessage(uint8_t senderId, const String& message) {
   String serial = broker.getSerialByClientId(senderId);
   
-  Serial.print(">>> Direct message from 0x");
-  Serial.print(senderId, HEX);
+  Serial.print(">>> Direct message from ");
+  Serial.print(senderId, DEC);
   if (serial.length() > 0) {
     Serial.print(" (SN: ");
     Serial.print(serial);
@@ -218,16 +218,17 @@ void listAllClients() {
     Serial.println("────────────────────────────────────────────────");
     
     broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
-      Serial.print("0x");
-      if (id < 0x10) Serial.print("0");
-      Serial.print(id, HEX);
-      Serial.print("  ");
+      Serial.print(id, DEC);
+      if (id < 10) Serial.print("     ");
+      else if (id < 100) Serial.print("    ");
+      else Serial.print("   ");
       
-      // Pad serial number
+      // Pad serial number to 28 chars
       Serial.print(serial);
       for (int i = serial.length(); i < 28; i++) {
         Serial.print(" ");
       }
+      Serial.print(" ");
       
       Serial.println(active ? "Active" : "Inactive");
     });
@@ -255,16 +256,17 @@ void listActiveClients() {
   
   broker.listRegisteredClients([&activeCount](uint8_t id, const String& serial, bool active) {
     if (active) {
-      Serial.print("0x");
-      if (id < 0x10) Serial.print("0");
-      Serial.print(id, HEX);
-      Serial.print("  ");
+      Serial.print(id, DEC);
+      if (id < 10) Serial.print("     ");
+      else if (id < 100) Serial.print("    ");
+      else Serial.print("   ");
       
-      // Pad serial number
+      // Pad serial number to 28 chars
       Serial.print(serial);
       for (int i = serial.length(); i < 28; i++) {
         Serial.print(" ");
       }
+      Serial.print(" ");
       
       Serial.println("-"); // Subscription count could be added
       activeCount++;
@@ -292,7 +294,7 @@ void listTopics() {
   }
   
   Serial.println("Topic Name                       Hash      Subscribers");
-  Serial.println("────────────────────────────────────────────────────");
+  Serial.println("──────────────────────────────────────────────────────");
   
   broker.listSubscribedTopics([](uint16_t hash, const String& name, uint8_t count) {
     // Print topic name (pad to 32 chars)
@@ -352,12 +354,20 @@ void publishMessage(const String& topic, const String& message) {
 
 // Unregister a client
 void unregisterClient(const String& param) {
-  // Try as hex ID first
-  if (param.startsWith("0x") || param.length() <= 2) {
-    uint8_t clientId = (uint8_t)strtol(param.c_str(), NULL, 16);
+  // Try as decimal ID first (if all digits)
+  bool isNumeric = true;
+  for (unsigned int i = 0; i < param.length(); i++) {
+    if (!isDigit(param.charAt(i))) {
+      isNumeric = false;
+      break;
+    }
+  }
+  
+  if (isNumeric && param.length() > 0 && param.length() <= 3) {
+    uint8_t clientId = (uint8_t)param.toInt();
     if (broker.unregisterClient(clientId)) {
-      Serial.print("Unregistered client 0x");
-      Serial.println(clientId, HEX);
+      Serial.print("Unregistered client ");
+      Serial.println(clientId, DEC);
     } else {
       Serial.println("Client not found");
     }
@@ -379,8 +389,8 @@ void findClient(const String& serial) {
   if (clientId != CAN_PS_UNASSIGNED_ID) {
     Serial.print("Client ID for serial '");
     Serial.print(serial);
-    Serial.print("': 0x");
-    Serial.println(clientId, HEX);
+    Serial.print("': ");
+    Serial.println(clientId, DEC);
   } else {
     Serial.print("No client found with serial: ");
     Serial.println(serial);

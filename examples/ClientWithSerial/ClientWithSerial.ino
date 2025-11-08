@@ -86,8 +86,8 @@ void setup() {
   // Connect to broker with serial number
   Serial.println("Connecting to broker...");
   if (client.begin(SERIAL_NUMBER, 5000)) {
-    Serial.print("✓ Connected! Client ID: 0x");
-    Serial.println(client.getClientId(), HEX);
+    Serial.print("✓ Connected! Client ID: ");
+    Serial.println(client.getClientId(), DEC);
     wasConnected = true;
   } else {
     Serial.println("× Failed to connect to broker!");
@@ -216,8 +216,8 @@ void onMessage(uint16_t topicHash, const String& topic, const String& message) {
 
 // Callback when a direct message is received
 void onDirectMessage(uint8_t senderId, const String& message) {
-  Serial.print(">>> Direct from 0x");
-  Serial.print(senderId, HEX);
+  Serial.print(">>> Direct from ");
+  Serial.print(senderId, DEC);
   Serial.print(": ");
   Serial.println(message);
 }
@@ -233,8 +233,8 @@ void showStatus() {
   Serial.println(client.isConnected() ? "Yes" : "No");
   
   if (client.isConnected()) {
-    Serial.print("Client ID:      0x");
-    Serial.println(client.getClientId(), HEX);
+    Serial.print("Client ID:      ");
+    Serial.println(client.getClientId(), DEC);
     Serial.print("Serial Number:  ");
     Serial.println(SERIAL_NUMBER);
     Serial.print("Subscriptions:  ");
@@ -258,8 +258,8 @@ void showSerialInfo() {
   Serial.println(SERIAL_NUMBER);
   
   if (client.isConnected()) {
-    Serial.print("Assigned ID:    0x");
-    Serial.println(client.getClientId(), HEX);
+    Serial.print("Assigned ID:    ");
+    Serial.println(client.getClientId(), DEC);
     Serial.println();
     Serial.println("Note: This ID will remain the same across");
     Serial.println("      reconnections as long as the serial");

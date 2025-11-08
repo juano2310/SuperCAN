@@ -63,7 +63,7 @@ void setup() {
   Serial.println("  list           - List clients and subscriptions");
   Serial.println("  topics         - List subscribed topics");
   Serial.println("  pub:topic:msg  - Publish to topic");
-  Serial.println("  msg:id:msg     - Send direct message to client");
+  Serial.println("  msg:id:msg     - Send direct message to client (id in decimal)");
   Serial.println("  stats          - Show statistics");
   Serial.println();
 }
@@ -97,12 +97,12 @@ void loop() {
       if (colonPos > 0) {
         String idStr = input.substring(4, colonPos);
         String message = input.substring(colonPos + 1);
-        uint8_t clientId = (uint8_t)strtol(idStr.c_str(), NULL, 16);
+        uint8_t clientId = (uint8_t)idStr.toInt();
         broker.sendDirectMessage(clientId, message);
-        Serial.print("Sent direct message to client 0x");
-        Serial.println(clientId, HEX);
+        Serial.print("Sent direct message to client ");
+        Serial.println(clientId, DEC);
       } else {
-        Serial.println("Usage: msg:clientId:message (clientId in hex)");
+        Serial.println("Usage: msg:clientId:message (clientId in decimal)");
       }
     } else if (input.length() > 0) {
       Serial.println("Unknown command. Available commands:");
@@ -113,8 +113,8 @@ void loop() {
 
 // Callback when a client connects
 void onClientConnect(uint8_t clientId) {
-  Serial.print("Client connected: 0x");
-  Serial.println(clientId, HEX);
+  Serial.print("Client connected: ");
+  Serial.println(clientId, DEC);
 }
 
 // Callback when a message is published
@@ -129,8 +129,8 @@ void onPublish(uint16_t topicHash, const String& topic, const String& message) {
 
 // Callback when a direct message is received
 void onDirectMessage(uint8_t senderId, const String& message) {
-  Serial.print("Direct message from 0x");
-  Serial.print(senderId, HEX);
+  Serial.print("Direct message from ");
+  Serial.print(senderId, DEC);
   Serial.print(": ");
   Serial.println(message);
 }

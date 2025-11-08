@@ -123,10 +123,10 @@ void loopBroker() {
       if (colonPos > 0) {
         String idStr = input.substring(4, colonPos);
         String message = input.substring(colonPos + 1);
-        uint8_t clientId = (uint8_t)strtol(idStr.c_str(), NULL, 16);
+        uint8_t clientId = (uint8_t)idStr.toInt();
         pubsub.sendDirectMessage(clientId, message);
-        Serial.print("Sent to client 0x");
-        Serial.println(clientId, HEX);
+        Serial.print("Sent to client ");
+        Serial.println(clientId, DEC);
       }
       
     } else if (input == "help") {
@@ -136,8 +136,8 @@ void loopBroker() {
 }
 
 void onClientConnect(uint8_t clientId) {
-  Serial.print(">>> Client 0x");
-  Serial.print(clientId, HEX);
+  Serial.print(">>> Client ");
+  Serial.print(clientId, DEC);
   Serial.println(" connected");
 }
 
@@ -149,8 +149,8 @@ void onBrokerPublish(uint16_t topicHash, const String& topic, const String& mess
 }
 
 void onBrokerDirectMessage(uint8_t senderId, const String& message) {
-  Serial.print(">>> Direct from 0x");
-  Serial.print(senderId, HEX);
+  Serial.print(">>> Direct from ");
+  Serial.print(senderId, DEC);
   Serial.print(": ");
   Serial.println(message);
 }
@@ -170,8 +170,8 @@ void setupClient() {
   delay(random(100, 500)); // Random delay to avoid collision
   
   if (pubsub.begin(5000)) {
-    Serial.print("Connected! Client ID: 0x");
-    Serial.println(pubsub.getClientId(), HEX);
+    Serial.print("Connected! Client ID: ");
+    Serial.println(pubsub.getClientId(), DEC);
   } else {
     Serial.println("Failed to connect to broker!");
   }
@@ -230,8 +230,8 @@ void loopClient() {
       
     } else if (input == "status") {
       Serial.println("\n=== Status ===");
-      Serial.print("Connected: Yes, ID: 0x");
-      Serial.println(pubsub.getClientId(), HEX);
+      Serial.print("Connected: Yes, ID: ");
+      Serial.println(pubsub.getClientId(), DEC);
       Serial.print("Subscriptions: ");
       Serial.println(pubsub.getSubscriptionCount());
       Serial.print("Uptime: ");
@@ -256,8 +256,8 @@ void onClientMessage(uint16_t topicHash, const String& topic, const String& mess
 }
 
 void onClientDirectMessage(uint8_t senderId, const String& message) {
-  Serial.print(">>> Direct from 0x");
-  Serial.print(senderId, HEX);
+  Serial.print(">>> Direct from ");
+  Serial.print(senderId, DEC);
   Serial.print(": ");
   Serial.println(message);
 }
@@ -272,7 +272,7 @@ void printHelp() {
 #if IS_BROKER
   Serial.println("  stats              - Show broker statistics");
   Serial.println("  pub:topic:message  - Publish to topic");
-  Serial.println("  msg:id:message     - Send to client (id in hex)");
+  Serial.println("  msg:id:message     - Send to client (id in decimal)");
 #else
   Serial.println("  sub:topic          - Subscribe to topic");
   Serial.println("  unsub:topic        - Unsubscribe from topic");

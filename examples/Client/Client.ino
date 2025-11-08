@@ -60,8 +60,8 @@ void setup() {
   // Connect to broker
   Serial.println("Connecting to broker...");
   if (client.begin(5000)) {
-    Serial.print("Connected! Client ID: 0x");
-    Serial.println(client.getClientId(), HEX);
+    Serial.print("Connected! Client ID: ");
+    Serial.println(client.getClientId(), DEC);
     wasConnected = true;
   } else {
     Serial.println("Failed to connect to broker!");
@@ -180,8 +180,8 @@ void onMessage(uint16_t topicHash, const String& topic, const String& message) {
 
 // Callback when a direct message is received
 void onDirectMessage(uint8_t senderId, const String& message) {
-  Serial.print("Direct message from 0x");
-  Serial.print(senderId, HEX);
+  Serial.print("Direct message from ");
+  Serial.print(senderId, DEC);
   Serial.print(": ");
   Serial.println(message);
 }
@@ -193,8 +193,8 @@ void showStatus() {
   Serial.println(client.isConnected() ? "Yes" : "No");
   
   if (client.isConnected()) {
-    Serial.print("Client ID: 0x");
-    Serial.println(client.getClientId(), HEX);
+    Serial.print("Client ID: ");
+    Serial.println(client.getClientId(), DEC);
     Serial.print("Subscriptions: ");
     Serial.println(client.getSubscriptionCount());
   }
