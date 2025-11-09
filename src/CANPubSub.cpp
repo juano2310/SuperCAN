@@ -136,6 +136,7 @@ CANPubSubBroker::CANPubSubBroker(CANControllerClass& can)
   : CANPubSubBase(can),
     _subTableSize(0),
     _nextClientID(0x01),
+    _nextTempID(101),
     _clientCount(0),
     _mappingCount(0),
     _storedSubCount(0),
@@ -152,6 +153,7 @@ CANPubSubBroker::CANPubSubBroker(CANControllerClass& can)
 bool CANPubSubBroker::begin() {
   _subTableSize = 0;
   _nextClientID = 0x01;
+  _nextTempID = 101;
   _clientCount = 0;
   _mappingCount = 0;
   _storedSubCount = 0;
@@ -198,6 +200,9 @@ void CANPubSubBroker::handleMessage(int packetSize) {
     case CAN_PS_DIRECT_MSG:
       handleDirectMessage();
       break;
+    case CAN_PS_PEER_MSG:
+      handlePeerMessage();
+      break;
     case CAN_PS_PING:
       handlePing();
       break;
@@ -206,7 +211,9 @@ void CANPubSubBroker::handleMessage(int packetSize) {
       if (_can->available() > 0) {
         handleIdRequestWithSerial();
       } else {
-        assignClientID(); // Old method for backward compatibility
+        // Assign temporary ID for clients without serial numbers
+        // These IDs are not persistent and won't be saved to storage
+        assignClientID();
       }
       break;
   }
@@ -322,6 +329,55 @@ void CANPubSubBroker::handlePing() {
   _can->endPacket();
 }
 
+void CANPubSubBroker::handlePeerMessage() {
+  // Peer-to-peer message forwarding (only for clients with permanent IDs)
+  // Format: [senderId][targetId][message...]
+  if (_can->available() < 2) return;
+  
+  uint8_t senderId = _can->read();
+  uint8_t targetId = _can->read();
+  
+  // Verify sender has a permanent ID (registered with serial number)
+  int senderIndex = findClientMappingById(senderId);
+  if (senderIndex < 0) {
+    // Sender doesn't have permanent ID, reject
+    return;
+  }
+  
+  // Verify target has a permanent ID
+  int targetIndex = findClientMappingById(targetId);
+  if (targetIndex < 0) {
+    // Target doesn't have permanent ID, reject
+    return;
+  }
+  
+  // Read message
+  String message = "";
+  while (_can->available()) {
+    message += (char)_can->read();
+  }
+  
+  // Forward message to target client
+  // Calculate total message size: senderId + targetId + message
+  size_t totalSize = 1 + 1 + message.length();
+  
+  if (totalSize > CAN_FRAME_DATA_SIZE) {
+    // Use extended message for long messages
+    uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
+    buffer[0] = senderId;
+    buffer[1] = targetId;
+    memcpy(buffer + 2, message.c_str(), min(message.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 2)));
+    
+    sendExtendedMessage(CAN_PS_PEER_MSG, buffer, min(2 + message.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
+  } else {
+    _can->beginPacket(CAN_PS_PEER_MSG);
+    _can->write(senderId);
+    _can->write(targetId);
+    _can->print(message);
+    _can->endPacket();
+  }
+}
+
 void CANPubSubBroker::addSubscription(uint8_t clientId, uint16_t topicHash) {
   // Find or create topic entry
   for (uint8_t i = 0; i < _subTableSize; i++) {
@@ -360,6 +416,16 @@ void CANPubSubBroker::removeSubscription(uint8_t clientId, uint16_t topicHash) {
             _subscriptions[i].subscribers[k] = _subscriptions[i].subscribers[k + 1];
           }
           _subscriptions[i].subCount--;
+          
+          // If no subscribers left, remove the topic entry
+          if (_subscriptions[i].subCount == 0) {
+            // Shift remaining topics
+            for (uint8_t k = i; k < _subTableSize - 1; k++) {
+              _subscriptions[k] = _subscriptions[k + 1];
+            }
+            _subTableSize--;
+          }
+          
           // Update stored subscriptions
           storeClientSubscriptions(clientId);
           return;
@@ -370,7 +436,8 @@ void CANPubSubBroker::removeSubscription(uint8_t clientId, uint16_t topicHash) {
 }
 
 void CANPubSubBroker::removeAllSubscriptions(uint8_t clientId) {
-  for (uint8_t i = 0; i < _subTableSize; i++) {
+  // Iterate through all topics (backwards to handle removal safely)
+  for (int i = _subTableSize - 1; i >= 0; i--) {
     for (uint8_t j = 0; j < _subscriptions[i].subCount; j++) {
       if (_subscriptions[i].subscribers[j] == clientId) {
         // Shift remaining subscribers
@@ -380,6 +447,15 @@ void CANPubSubBroker::removeAllSubscriptions(uint8_t clientId) {
         _subscriptions[i].subCount--;
         j--; // Check the same index again
       }
+    }
+    
+    // If no subscribers left after removing this client, remove the topic entry
+    if (_subscriptions[i].subCount == 0) {
+      // Shift remaining topics
+      for (uint8_t k = i; k < _subTableSize - 1; k++) {
+        _subscriptions[k] = _subscriptions[k + 1];
+      }
+      _subTableSize--;
     }
   }
   // Update stored subscriptions
@@ -422,12 +498,12 @@ void CANPubSubBroker::forwardToSubscribers(uint16_t topicHash, const String& mes
 
 void CANPubSubBroker::assignClientID() {
   _can->beginPacket(CAN_PS_ID_RESPONSE);
-  _can->write(_nextClientID);
+  _can->write(_nextTempID);
   _can->endPacket();
   
-  _nextClientID++;
-  if (_nextClientID == 0xFF) {
-    _nextClientID = 0x01; // Wrap around, skip special IDs
+  _nextTempID++;
+  if (_nextTempID == 0xFF) {
+    _nextTempID = 101; // Wrap around to 101 for temporary IDs
   }
 }
 
@@ -537,23 +613,39 @@ void CANPubSubBroker::handleIdRequestWithSerial() {
   }
   
   if (serialNumber.length() == 0) {
-    // No serial number provided, use old method
+    // No serial number provided - assign temporary ID (not saved to storage)
     assignClientID();
     return;
   }
   
-  // Find or create client ID for this serial number
+  // Find or create client ID for this serial number (will be saved to storage)
   uint8_t assignedId = findOrCreateClientId(serialNumber);
   
   // Check if this is a returning client (has stored subscriptions)
   int subIndex = findStoredSubscription(assignedId);
   bool hasStoredSubs = (subIndex >= 0 && _storedSubscriptions[subIndex].topicCount > 0);
   
-  // Send response with flag indicating if subscriptions will be restored
-  _can->beginPacket(CAN_PS_ID_RESPONSE);
-  _can->write(assignedId);
-  _can->write(hasStoredSubs ? 0x01 : 0x00); // Flag: has stored subscriptions
-  _can->endPacket();
+  // Send response with serial number included so client can verify it's for them
+  // Format: [assignedId][hasStoredSubs][serialNumberLength][serialNumber...]
+  size_t totalSize = 1 + 1 + 1 + serialNumber.length();
+  
+  if (totalSize > CAN_FRAME_DATA_SIZE) {
+    // Use extended message for long serial numbers
+    uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
+    buffer[0] = assignedId;
+    buffer[1] = hasStoredSubs ? 0x01 : 0x00;
+    buffer[2] = (uint8_t)serialNumber.length();
+    memcpy(buffer + 3, serialNumber.c_str(), min(serialNumber.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 3)));
+    
+    sendExtendedMessage(CAN_PS_ID_RESPONSE, buffer, min(3 + serialNumber.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
+  } else {
+    _can->beginPacket(CAN_PS_ID_RESPONSE);
+    _can->write(assignedId);
+    _can->write(hasStoredSubs ? 0x01 : 0x00); // Flag: has stored subscriptions
+    _can->write((uint8_t)serialNumber.length());
+    _can->print(serialNumber);
+    _can->endPacket();
+  }
   
   // Track connected client if not already tracked
   bool found = false;
@@ -714,17 +806,38 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
         serialNumber += (char)data[i];
       }
       
+      if (serialNumber.length() == 0) {
+        // No serial number provided - reject by not sending a response
+        return;
+      }
+      
       uint8_t assignedId = findOrCreateClientId(serialNumber);
       
       // Check if this is a returning client (has stored subscriptions)
       int subIndex = findStoredSubscription(assignedId);
       bool hasStoredSubs = (subIndex >= 0 && _storedSubscriptions[subIndex].topicCount > 0);
       
-      // Send response with flag indicating if subscriptions will be restored
-      _can->beginPacket(CAN_PS_ID_RESPONSE);
-      _can->write(assignedId);
-      _can->write(hasStoredSubs ? 0x01 : 0x00); // Flag: has stored subscriptions
-      _can->endPacket();
+      // Send response with serial number included so client can verify it's for them
+      // Format: [assignedId][hasStoredSubs][serialNumberLength][serialNumber...]
+      size_t totalSize = 1 + 1 + 1 + serialNumber.length();
+      
+      if (totalSize > CAN_FRAME_DATA_SIZE) {
+        // Use extended message for long serial numbers
+        uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
+        buffer[0] = assignedId;
+        buffer[1] = hasStoredSubs ? 0x01 : 0x00;
+        buffer[2] = (uint8_t)serialNumber.length();
+        memcpy(buffer + 3, serialNumber.c_str(), min(serialNumber.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 3)));
+        
+        sendExtendedMessage(CAN_PS_ID_RESPONSE, buffer, min(3 + serialNumber.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
+      } else {
+        _can->beginPacket(CAN_PS_ID_RESPONSE);
+        _can->write(assignedId);
+        _can->write(hasStoredSubs ? 0x01 : 0x00);
+        _can->write((uint8_t)serialNumber.length());
+        _can->print(serialNumber);
+        _can->endPacket();
+      }
       
       // Track connected client if not already tracked
       bool found = false;
@@ -832,6 +945,55 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       _can->write(senderId);
       _can->print("ACK");
       _can->endPacket();
+      break;
+    }
+    
+    case CAN_PS_PEER_MSG: {
+      // Extended peer message from client to client (forwarded by broker)
+      // Format (in buffer): [targetId][message...]
+      // Note: senderId was already extracted by processExtendedFrame from first byte
+      if (length < 1) return;
+      
+      uint8_t targetId = data[0];
+      
+      // Verify sender has a permanent ID (registered with serial number)
+      int senderIndex = findClientMappingById(senderId);
+      if (senderIndex < 0) {
+        // Sender doesn't have permanent ID, reject
+        return;
+      }
+      
+      // Verify target has a permanent ID
+      int targetIndex = findClientMappingById(targetId);
+      if (targetIndex < 0) {
+        // Target doesn't have permanent ID, reject
+        return;
+      }
+      
+      // Extract message
+      String message = "";
+      for (size_t i = 1; i < length; i++) {
+        message += (char)data[i];
+      }
+      
+      // Forward message to target client
+      size_t totalSize = 1 + 1 + message.length();
+      
+      if (totalSize > CAN_FRAME_DATA_SIZE) {
+        // Use extended message for long messages
+        uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
+        buffer[0] = senderId;
+        buffer[1] = targetId;
+        memcpy(buffer + 2, message.c_str(), min(message.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 2)));
+        
+        sendExtendedMessage(CAN_PS_PEER_MSG, buffer, min(2 + message.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
+      } else {
+        _can->beginPacket(CAN_PS_PEER_MSG);
+        _can->write(senderId);
+        _can->write(targetId);
+        _can->print(message);
+        _can->endPacket();
+      }
       break;
     }
   }
@@ -956,6 +1118,9 @@ void CANPubSubClient::handleMessage(int packetSize) {
     case CAN_PS_DIRECT_MSG:
       handleDirectMessageReceived();
       break;
+    case CAN_PS_PEER_MSG:
+      // Peer messages are handled by onExtendedMessageComplete() only
+      break;
     case CAN_PS_PONG:
       handlePong();
       break;
@@ -968,7 +1133,7 @@ void CANPubSubClient::handleMessage(int packetSize) {
 void CANPubSubClient::handleIdAssignment() {
   if (_can->available() < 1) return;
   
-  _clientId = _can->read();
+  uint8_t assignedId = _can->read();
   
   // Check if there's a flag indicating stored subscriptions will be restored
   bool hasStoredSubs = false;
@@ -976,6 +1141,23 @@ void CANPubSubClient::handleIdAssignment() {
     hasStoredSubs = (_can->read() == 0x01);
   }
   
+  // If serial number is provided, verify it matches ours
+  if (_can->available() > 0 && _serialNumber.length() > 0) {
+    uint8_t serialLen = _can->read();
+    String receivedSerial = "";
+    
+    for (uint8_t i = 0; i < serialLen && _can->available(); i++) {
+      receivedSerial += (char)_can->read();
+    }
+    
+    // Only accept this ID if the serial number matches
+    if (receivedSerial != _serialNumber) {
+      // This ID response is not for us, ignore it
+      return;
+    }
+  }
+  
+  _clientId = assignedId;
   _connected = true;
   
   // If subscriptions will be restored, broker will send them shortly
@@ -1204,6 +1386,36 @@ bool CANPubSubClient::sendDirectMessage(const String& message) {
   }
 }
 
+bool CANPubSubClient::sendPeerMessage(uint8_t targetClientId, const String& message) {
+  if (!_connected) return false;
+  
+  // Only clients with permanent IDs (registered with serial numbers) can send peer messages
+  if (_serialNumber.length() == 0) {
+    return false; // No serial number = temporary ID, peer messaging not allowed
+  }
+  
+  // Calculate total message size: senderId + targetId + message
+  size_t totalSize = 1 + 1 + message.length();
+  
+  if (totalSize > CAN_FRAME_DATA_SIZE) {
+    // Use extended message for long messages
+    uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
+    buffer[0] = _clientId;
+    buffer[1] = targetClientId;
+    memcpy(buffer + 2, message.c_str(), min(message.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 2)));
+    
+    return sendExtendedMessage(CAN_PS_PEER_MSG, buffer, min(2 + message.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
+  } else {
+    _can->beginPacket(CAN_PS_PEER_MSG);
+    _can->write(_clientId);
+    _can->write(targetClientId);
+    _can->print(message);
+    _can->endPacket();
+    
+    return true;
+  }
+}
+
 bool CANPubSubClient::ping() {
   if (!_connected) return false;
   
@@ -1259,6 +1471,35 @@ void CANPubSubClient::listSubscribedTopics(std::function<void(uint16_t hash, con
 void CANPubSubClient::onExtendedMessageComplete(uint8_t msgType, uint8_t senderId, const uint8_t* data, size_t length) {
   // Handle extended messages based on type
   switch (msgType) {
+    case CAN_PS_ID_RESPONSE: {
+      // Extended ID response with serial number verification
+      // Format (in buffer): [hasStoredSubs][serialNumberLength][serialNumber...]
+      // Note: assignedId was already extracted by processExtendedFrame from first byte
+      if (length < 2) return;
+      
+      uint8_t assignedId = senderId; // The extracted "senderId" is actually the assignedId
+      bool hasStoredSubs = (data[0] == 0x01);
+      uint8_t serialLen = data[1];
+      
+      String receivedSerial = "";
+      for (uint8_t i = 0; i < serialLen && (2 + i) < length; i++) {
+        receivedSerial += (char)data[2 + i];
+      }
+      
+      // Only accept this ID if the serial number matches ours
+      if (_serialNumber.length() > 0 && receivedSerial != _serialNumber) {
+        // This ID response is not for us, ignore it
+        return;
+      }
+      
+      _clientId = assignedId;
+      _connected = true;
+      
+      // If subscriptions will be restored, broker will send them shortly
+      // Client just needs to wait and handle incoming SUBSCRIBE messages
+      break;
+    }
+    
     case CAN_PS_SUBSCRIBE: {
       // Extended subscribe notification from broker (restored subscription)
       // Format (in buffer): [topicHash_h][topicHash_l][topicNameLen][topicName...]
@@ -1337,6 +1578,28 @@ void CANPubSubClient::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
         message += (char)data[i];
       }
       
+      if (_onDirectMessage) {
+        _onDirectMessage(senderId, message);
+      }
+      break;
+    }
+    
+    case CAN_PS_PEER_MSG: {
+      // Extended peer message (from another client)
+      // Format (in buffer): [targetId][message...]
+      // Note: senderId was already extracted by processExtendedFrame from first byte
+      if (length < 1) return;
+      
+      uint8_t targetId = data[0];
+      
+      if (targetId != _clientId) return; // Not for us
+      
+      String message = "";
+      for (size_t i = 1; i < length; i++) {
+        message += (char)data[i];
+      }
+      
+      // Call direct message callback (reuse for peer messages)
       if (_onDirectMessage) {
         _onDirectMessage(senderId, message);
       }

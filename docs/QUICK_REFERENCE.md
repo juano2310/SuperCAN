@@ -82,7 +82,20 @@ client.publish("control/led", "on");
 
 ### Send Direct Message
 ```cpp
+// To broker (ID 0)
 client.sendDirectMessage("status request");
+
+// Peer-to-peer (ID 1-100) ⚡
+// Only for clients with permanent IDs
+client.sendPeerMessage(2, "Hello peer!");
+```
+
+### Unified Messaging Command ⚡
+```cpp
+// Using serial interface (ClientWithSerial example):
+// msg:0:text     → Send to broker
+// msg:2:hello    → Send to peer client ID 2
+// msg:5:data     → Send to peer client ID 5
 ```
 
 ### Check Connection

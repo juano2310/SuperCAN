@@ -12,15 +12,16 @@ The Super CAN+ library includes advanced client ID management using **serial num
 
 ## Key Features
 
-✅ **Persistent ID Assignment** - Same serial number always gets the same client ID (sequential: 1, 2, 3, ...)  
+✅ **Persistent ID Assignment** - Same serial number always gets the same client ID (range: 1-100)  
 ✅ **Flash Memory Storage** - Mappings and subscriptions survive power outages and resets  
 ✅ **🔄 Automatic Subscription Restoration** - Subscriptions automatically restored on reconnection  
+✅ **Peer-to-Peer Messaging** - Registered clients can send direct messages to each other  
 ✅ **Automatic Registration** - First connection automatically registers the client  
 ✅ **Reconnection Friendly** - Same ID and subscriptions assigned on reconnect  
 ✅ **Client Management** - Add, edit, remove, and query registered clients  
 ✅ **Serial Number Lookup** - Find client ID by serial or serial by ID  
 ✅ **Platform Agnostic** - Uses ESP32 Preferences or Arduino EEPROM  
-✅ **Backward Compatible** - Old clients without serial numbers still work  
+✅ **Backward Compatible** - Old clients without serial numbers still work (IDs 101+)  
 ✅ **Extended Frame Support** - Handles long serial numbers (>8 bytes) automatically  
 
 ## How It Works
@@ -61,6 +62,32 @@ The broker maintains a table of registered clients **stored in flash memory**:
 - **Subscriptions**: Stored topic subscriptions, automatically restored on reconnect
 - **Storage**: Automatically saved to flash memory on each change
 - **Display**: IDs shown in decimal format (1, 2, 3) not hex (0x01, 0x02, 0x03)
+
+### ID Assignment Ranges
+
+The library uses different ID ranges for different purposes:
+
+| ID Range | Type          | Features                  |
+|----------|---------------|---------------------------|
+| 0        | Broker        | Special ID for the broker |
+| 1-100    | Permanent IDs | Registered clients with serial numbers - support peer-to-peer messaging |
+| 101-254  | Temporary IDs | Guest clients without serial numbers - pub/sub only |
+| 255      | Unassigned    | Special ID indicating no assignment |
+
+**Permanent IDs (1-100):**
+- Assigned to clients registered with serial numbers
+- Stored in flash memory and persist across power cycles
+- Subscriptions automatically restored on reconnection
+- **Can send and receive peer-to-peer messages**
+- Same ID assigned every time for the same serial number
+
+**Temporary IDs (101+):**
+- Assigned to clients without serial numbers
+- Not stored in flash memory
+- Different ID on each connection
+- Can publish and subscribe to topics
+- **Cannot participate in peer-to-peer messaging**
+- Subscriptions not restored on reconnection
 
 ## API Reference
 
@@ -493,10 +520,13 @@ Both can coexist on the same network!
 
 | Feature | Without Serial Numbers | With Serial Numbers |
 |---------|------------------------|---------------------|
+| ID Range | 101-254 (Temporary) | 1-100 (Permanent) |
 | ID Persistence | ❌ New ID on reconnect | ✅ Same ID always |
 | Power Cycle Safety | ❌ Lost on power loss | ✅ Survives power loss |
 | Client Identification | ❌ Only by ID | ✅ By serial + ID |
 | Configuration Management | ❌ Manual tracking | ✅ Automatic |
+| Subscription Restoration | ❌ Must resubscribe | ✅ Automatic restore |
+| Peer-to-Peer Messaging | ❌ Not available | ✅ Fully supported |
 | Network Administration | ❌ Difficult | ✅ Easy |
 | Debugging | ❌ Hard to identify | ✅ Clear identification |
 | Hot Swap Support | ❌ Manual reconfiguration | ✅ Automatic recognition |

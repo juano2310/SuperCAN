@@ -479,6 +479,47 @@ client.sendDirectMessage("Status request");
 
 ---
 
+#### sendPeerMessage()
+
+```cpp
+bool sendPeerMessage(uint8_t targetClientId, const String& message)
+```
+
+Send a peer-to-peer message directly to another client (without going through broker callbacks). This feature is only available for clients with permanent IDs (registered with serial numbers). Temporary clients (IDs 101+) cannot send or receive peer messages.
+
+**Parameters:**
+- `targetClientId` - ID of the target client (must have permanent ID < 101)
+- `message` - Message to send
+
+**Returns:** `true` on success, `false` on failure (e.g., sender or receiver has temporary ID)
+
+**Example:**
+```cpp
+// Send message to client with ID 2
+if (client.sendPeerMessage(2, "Hello from peer!")) {
+  Serial.println("Peer message sent");
+} else {
+  Serial.println("Failed - check both clients have permanent IDs");
+}
+```
+
+**Serial Command Interface:**
+When using the `ClientWithSerial` example, use the unified `msg:` command:
+```cpp
+// msg:0:text     → Send to broker (ID 0)
+// msg:2:hello    → Send peer message to client ID 2
+// msg:5:data     → Send peer message to client ID 5
+```
+
+**Note:** 
+- Both sender and receiver must have permanent IDs (registered with serial numbers)
+- Temporary clients (ID 101+) cannot participate in peer messaging
+- Messages are forwarded by the broker but not logged in broker callbacks
+- Received peer messages trigger the `onDirectMessage()` callback
+- Use ID 0 to send to broker, any ID 1-100 for peer-to-peer
+
+---
+
 #### ping()
 
 ```cpp
@@ -520,10 +561,24 @@ client.onMessage([](uint16_t hash, const String& topic, const String& msg) {
 void onDirectMessage(DirectMessageCallback callback)
 ```
 
-Register a callback for direct messages.
+Register a callback for direct messages from the broker and peer-to-peer messages from other clients.
 
 **Parameters:**
 - `callback` - Function with signature `void callback(uint8_t senderId, const String& message)`
+
+**Example:**
+```cpp
+client.onDirectMessage([](uint8_t senderId, const String& msg) {
+  if (senderId == 0) {
+    Serial.println("Message from broker: " + msg);
+  } else {
+    Serial.print("Peer message from client ");
+    Serial.print(senderId);
+    Serial.print(": ");
+    Serial.println(msg);
+  }
+});
+```
 
 ---
 
@@ -694,6 +749,7 @@ Callback for connection events.
 #define CAN_PS_PING           0x06
 #define CAN_PS_PONG           0x07
 #define CAN_PS_ACK            0x08
+#define CAN_PS_PEER_MSG       0x09  // Peer-to-peer message
 #define CAN_PS_ID_REQUEST     0xFF
 #define CAN_PS_ID_RESPONSE    0xFE
 ```

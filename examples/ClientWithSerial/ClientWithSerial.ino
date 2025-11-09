@@ -19,7 +19,8 @@
   - sub:topic      - Subscribe to a topic
   - unsub:topic    - Unsubscribe from topic
   - pub:topic:msg  - Publish message to topic
-  - msg:message    - Send direct message to broker
+  - msg:0:message  - Send direct message to broker (ID 0)
+  - msg:id:message - Send peer message to client ID
   - ping           - Ping the broker
   - status         - Show connection status
   - serial         - Show serial number and ID
@@ -99,7 +100,8 @@ void setup() {
   Serial.println("  sub:topic      - Subscribe to topic");
   Serial.println("  unsub:topic    - Unsubscribe from topic");
   Serial.println("  pub:topic:msg  - Publish to topic");
-  Serial.println("  msg:message    - Send direct message to broker");
+  Serial.println("  msg:0:message  - Send to broker (ID 0)");
+  Serial.println("  msg:id:message - Send peer message to client");
   Serial.println("  ping           - Ping broker");
   Serial.println("  status         - Show connection status");
   Serial.println("  serial         - Show serial number and ID");
@@ -171,12 +173,33 @@ void loop() {
       }
       
     } else if (input.startsWith("msg:")) {
-      String message = input.substring(4);
-      if (client.sendDirectMessage(message)) {
-        Serial.print("✓ Sent to broker: ");
-        Serial.println(message);
+      int colonPos = input.indexOf(':', 4);
+      if (colonPos > 0) {
+        uint8_t targetId = input.substring(4, colonPos).toInt();
+        String message = input.substring(colonPos + 1);
+        
+        if (targetId == 0) {
+          // Send to broker
+          if (client.sendDirectMessage(message)) {
+            Serial.print("✓ Sent to broker: ");
+            Serial.println(message);
+          } else {
+            Serial.println("× Failed to send message");
+          }
+        } else {
+          // Send peer-to-peer
+          if (client.sendPeerMessage(targetId, message)) {
+            Serial.print("✓ Peer message sent to client ");
+            Serial.print(targetId);
+            Serial.print(": ");
+            Serial.println(message);
+          } else {
+            Serial.println("× Failed to send peer message");
+            Serial.println("  Note: Both clients must have permanent IDs (< 101)");
+          }
+        }
       } else {
-        Serial.println("× Failed to send message");
+        Serial.println("Usage: msg:id:message (0 for broker, >0 for peers)");
       }
       
     } else if (input == "ping") {
@@ -214,11 +237,15 @@ void onMessage(uint16_t topicHash, const String& topic, const String& message) {
   Serial.println(message);
 }
 
-// Callback when a direct message is received
+// Callback when a direct message is received (from broker or peer)
 void onDirectMessage(uint8_t senderId, const String& message) {
-  Serial.print(">>> Direct from ");
-  Serial.print(senderId, DEC);
-  Serial.print(": ");
+  if (senderId == 0) {
+    Serial.print(">>> Broker: ");
+  } else {
+    Serial.print(">>> Peer (ID ");
+    Serial.print(senderId, DEC);
+    Serial.print("): ");
+  }
   Serial.println(message);
 }
 

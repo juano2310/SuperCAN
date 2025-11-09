@@ -21,6 +21,7 @@
 #define CAN_PS_PUBLISH        0x03
 #define CAN_PS_TOPIC_DATA     0x04
 #define CAN_PS_DIRECT_MSG     0x05
+#define CAN_PS_PEER_MSG       0x09  // Peer-to-peer message (client to client)
 #define CAN_PS_ID_REQUEST     0xFF
 #define CAN_PS_ID_RESPONSE    0xFE
 #define CAN_PS_PING           0x06
@@ -209,12 +210,14 @@ private:
   void handleUnsubscribe();
   void handlePublish();
   void handleDirectMessage();
+  void handlePeerMessage();
   void handlePing();
   
   // Data members
   Subscription _subscriptions[MAX_SUBSCRIPTIONS];
   uint8_t _subTableSize;
   uint8_t _nextClientID;
+  uint8_t _nextTempID;
   uint8_t _connectedClients[256]; // Track connected clients
   uint8_t _clientCount;
   
@@ -272,6 +275,7 @@ public:
   bool unsubscribe(const String& topic);
   bool publish(const String& topic, const String& message);
   bool sendDirectMessage(const String& message);
+  bool sendPeerMessage(uint8_t targetClientId, const String& message);
   bool ping();
   
   // Callbacks
