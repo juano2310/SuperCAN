@@ -1,6 +1,8 @@
 # Pub/Sub API Reference
 
-Complete API reference for the publish/subscribe protocol in Super CAN+ library.
+**A modern, robust communication protocol for the age of AI**
+
+Complete API reference for the publish/subscribe protocol in Super CAN library.
 
 ## Table of Contents
 

@@ -1,6 +1,8 @@
 // Copyright (c) Sandeep Mistry. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 // Extended with publish/subscribe protocol by Juan Pablo Risso
+//
+// Super CAN - A modern, robust communication protocol for the age of AI
 
 #ifndef CAN_H
 #define CAN_H

@@ -1,6 +1,8 @@
 # Getting Started with CAN Pub/Sub Protocol
 
-This guide will help you get started with the publish/subscribe protocol in the Super CAN+ library.
+**A modern, robust communication protocol for the age of AI**
+
+This guide will help you get started with the publish/subscribe protocol in the Super CAN library.
 
 ## Table of Contents
 
