@@ -2,17 +2,30 @@
 
 ## Overview
 
-The SuperCAN library now includes automatic connection monitoring through periodic ping/pong exchanges. The **broker** actively monitors client health by pinging them at regular intervals, and automatically marks unresponsive clients as inactive.
+The SuperCAN library includes automatic connection monitoring through periodic ping/pong exchanges. The **broker** actively monitors client health by pinging them at regular intervals, and automatically marks unresponsive clients as offline.
+
+## Real-Time Online Status
+
+**NEW:** Clients are automatically marked as **online** when they send **any** message to the broker, including:
+- Subscribe/Unsubscribe requests
+- Publish messages
+- Direct messages
+- Ping messages
+- Pong responses (to broker pings)
+- Peer-to-peer messages
+
+This provides immediate online status updates without relying solely on ping/pong exchanges. Auto-ping is optional and provides an additional layer of monitoring for idle clients.
 
 ## How It Works
 
 ### Broker-Side (Active Monitoring)
 
-1. **Periodic Pings**: The broker sends PING messages to all registered clients at a configurable interval
-2. **Response Tracking**: Tracks PONG responses from each client
-3. **Missed Ping Counter**: Increments a counter for each unanswered ping
-4. **Auto-Disconnect**: Marks clients as inactive after exceeding max missed pings
-5. **Callbacks**: Triggers `onClientDisconnect` callback when a client times out
+1. **Automatic Online Tracking**: Marks clients as online when any message is received
+2. **Periodic Pings** (Optional): The broker sends PING messages to all registered clients at a configurable interval
+3. **Response Tracking**: Tracks PONG responses from each client
+4. **Missed Ping Counter**: Increments a counter for each unanswered ping
+5. **Auto-Disconnect**: Marks clients as offline after exceeding max missed pings
+6. **Callbacks**: Triggers `onClientConnect` when first message received, `onClientDisconnect` when client times out
 
 ### Client-Side (Passive Response)
 
@@ -87,14 +100,20 @@ Register a callback that is called when a PONG response is received from the bro
 - **Example**:
 ```cpp
 client.onPong([]() {
-  Serial.print("Pong at ");
-  Serial.println(millis());
+  unsigned long rtt = client.getLastPingTime();
+  Serial.print("Pong received, RTT: ");
+  Serial.print(rtt);
+  Serial.println("ms");
 });
 ```
 
 #### `bool ping()`
 Manually send a ping to the broker (clients can still initiate pings).
 - **Returns**: true if ping was sent successfully
+
+#### `unsigned long getLastPingTime()`
+Get the round-trip time of the last successful ping/pong exchange.
+- **Returns**: Time in milliseconds between ping sent and pong received (0 if no valid pong received yet)
 
 ## Protocol Details
 
@@ -176,14 +195,59 @@ void loop() {
 }
 ```
 
+## Monitoring Client Status
+
+The broker provides comprehensive client status information:
+
+```cpp
+// Check total registered vs. online clients
+Serial.print("Registered clients: ");
+Serial.println(broker.getRegisteredClientCount());
+Serial.print("Online clients: ");
+Serial.println(broker.getClientCount());
+
+// Check if specific client is online
+if (broker.isClientOnline(clientId)) {
+  Serial.println("Client is online");
+} else {
+  Serial.println("Client is offline");
+}
+
+// Get client's subscription count
+uint8_t subs = broker.getClientSubscriptionCount(clientId);
+Serial.print("Client has ");
+Serial.print(subs);
+Serial.println(" subscriptions");
+
+// List all registered clients with status
+broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
+  Serial.print("Client ");
+  Serial.print(id);
+  Serial.print(" (");
+  Serial.print(serial);
+  Serial.print("): ");
+  
+  if (broker.isClientOnline(id)) {
+    Serial.print("Online, ");
+    Serial.print(broker.getClientSubscriptionCount(id));
+    Serial.println(" subscriptions");
+  } else {
+    Serial.println("Offline");
+  }
+});
+```
+
 ## Notes
 
+- **Real-time online status**: Clients marked online immediately upon receiving any message
 - **Only registered clients** (with serial numbers) are monitored via auto-ping
+- **Auto-ping is optional**: Online status works even without auto-ping enabled
 - Temporary clients (without serial numbers) are not tracked
 - Ping/pong uses standard CAN frames (not extended)
 - Small delay (5ms) between pings to prevent bus congestion
 - Client disconnection does NOT remove stored subscriptions (they're restored on reconnect)
 - Manual pings from clients still work as before
+- Online status resets when ping monitoring detects timeout (if auto-ping enabled)
 
 ## See Also
 

@@ -79,9 +79,18 @@ void loop() {
 }
 
 void onPeerMessage(uint8_t senderId, const String& message) {
-  Serial.println("\n--- Peer Message Received ---");
-  Serial.print("From Client ID: ");
-  Serial.println(senderId);
+  // Check if message is from self
+  if (senderId == client.getClientId()) {
+    Serial.println("\n--- Self Message Received ---");
+    Serial.print("From: My own ID (");
+    Serial.print(senderId);
+    Serial.println(")");
+  } else {
+    Serial.println("\n--- Peer Message Received ---");
+    Serial.print("From Client ID: ");
+    Serial.println(senderId);
+  }
+  
   Serial.print("Message: ");
   Serial.println(message);
   Serial.println("-----------------------------\n");

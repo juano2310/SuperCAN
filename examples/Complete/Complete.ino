@@ -264,9 +264,10 @@ void onClientDirectMessage(uint8_t senderId, const String& message) {
 }
 
 void onClientPong() {
+  unsigned long rtt = pubsub.getLastPingTime();
   Serial.print(">>> Pong from broker [");
-  Serial.print(millis() / 1000);
-  Serial.println("s]");
+  Serial.print(rtt);
+  Serial.println("ms]");
 }
 
 #endif

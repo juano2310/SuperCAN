@@ -186,7 +186,11 @@ void handleIntervalControl(const String& message) {
 }
 
 void onDirectMessage(uint8_t senderId, const String& message) {
-  Serial.print("Direct message from 0x");
+  if (senderId == client.getClientId()) {
+    Serial.print("Self message from 0x");
+  } else {
+    Serial.print("Direct message from 0x");
+  }
   Serial.print(senderId, HEX);
   Serial.print(": ");
   Serial.println(message);

@@ -66,6 +66,7 @@ onClientConnect	KEYWORD2
 onClientDisconnect	KEYWORD2
 onPublish	KEYWORD2
 onPong	KEYWORD2
+getLastPingTime	KEYWORD2
 sendToClient	KEYWORD2
 broadcastMessage	KEYWORD2
 getClientCount	KEYWORD2

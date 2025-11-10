@@ -205,7 +205,7 @@ Serial.println(broker.getRegisteredClientCount());
 ```cpp
 void listRegisteredClients(void (*callback)(uint8_t id, const String& serial, bool active))
 ```
-Iterate through all registered clients with a callback.
+Iterate through all registered clients with a callback. The `active` parameter indicates if the client is registered (not unregistered). To check if a client is currently online, use `isClientOnline()`.
 
 **Example:**
 ```cpp
@@ -214,9 +214,46 @@ broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
   Serial.print(id, DEC);
   Serial.print(" Serial: ");
   Serial.print(serial);
-  Serial.print(" Status: ");
-  Serial.println(active ? "Active" : "Inactive");
+  Serial.print(" Registered: ");
+  Serial.print(active ? "Yes" : "No");
+  Serial.print(" Online: ");
+  Serial.println(broker.isClientOnline(id) ? "Yes" : "No");
 });
+```
+
+---
+
+#### isClientOnline()
+```cpp
+bool isClientOnline(uint8_t clientId)
+```
+Check if a client is currently online (has recently sent a message to the broker).
+
+**Returns:** `true` if online, `false` if offline
+
+**Example:**
+```cpp
+if (broker.isClientOnline(5)) {
+  Serial.println("Client 5 is online");
+}
+```
+
+---
+
+#### getClientSubscriptionCount()
+```cpp
+uint8_t getClientSubscriptionCount(uint8_t clientId)
+```
+Get the number of topics a client is subscribed to.
+
+**Returns:** Number of subscriptions
+
+**Example:**
+```cpp
+uint8_t subs = broker.getClientSubscriptionCount(5);
+Serial.print("Client 5 has ");
+Serial.print(subs);
+Serial.println(" subscriptions");
 ```
 
 ---

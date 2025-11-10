@@ -25,7 +25,7 @@
   
   Commands (via Serial):
   - list          - List all registered clients
-  - clients       - Show active clients
+  - clients       - Show registered clients with online/offline status
   - pub:topic:msg - Publish message to a topic
   - msg:id:msg    - Send direct message to client
   - stats         - Show broker statistics
@@ -100,8 +100,7 @@ void setup() {
   Serial.println("Broker ready! (Mappings stored in flash memory)");
   Serial.println();
   Serial.println("Commands:");
-  Serial.println("  list           - List all registered clients");
-  Serial.println("  clients        - Show active clients");
+  Serial.println("  clients        - Show registered clients with online/offline status");
   Serial.println("  topics         - List subscribed topics");
   Serial.println("  pub:topic:msg  - Publish to topic");
   Serial.println("  msg:id:msg     - Send direct message to client");
@@ -127,10 +126,7 @@ void loop() {
     String input = Serial.readStringUntil('\n');
     input.trim();
     
-    if (input == "list") {
-      listAllClients();
-      
-    } else if (input == "clients") {
+    if (input == "clients") {
       listActiveClients();
       
     } else if (input == "topics") {
@@ -155,9 +151,14 @@ void loop() {
         String idStr = input.substring(4, colonPos);
         String message = input.substring(colonPos + 1);
         uint8_t clientId = (uint8_t)idStr.toInt();
-        broker.sendDirectMessage(clientId, message);
-        Serial.print("Sent direct message to client ");
-        Serial.println(clientId, DEC);
+        
+        if (clientId == 0) {
+          Serial.println("✗ Error: Cannot send message to broker itself (ID 0)");
+        } else {
+          broker.sendDirectMessage(clientId, message);
+          Serial.print("Sent direct message to client ");
+          Serial.println(clientId, DEC);
+        }
       } else {
         Serial.println("Usage: msg:clientId:message (clientId in decimal)");
       }
@@ -261,81 +262,56 @@ void onDirectMessage(uint8_t senderId, const String& message) {
   Serial.println(message);
 }
 
-// List all registered clients
-void listAllClients() {
+// List active clients
+void listActiveClients() {
   Serial.println();
   Serial.println("╔═══════════════════════════════════════════════╗");
   Serial.println("║         Registered Clients                    ║");
   Serial.println("╚═══════════════════════════════════════════════╝");
   Serial.println();
   
-  uint8_t count = broker.getRegisteredClientCount();
-  
-  if (count == 0) {
-    Serial.println("No clients registered yet.");
-  } else {
-    Serial.println("ID    Serial Number                 Status");
-    Serial.println("────────────────────────────────────────────────");
-    
-    broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
-      Serial.print(id, DEC);
-      if (id < 10) Serial.print("     ");
-      else if (id < 100) Serial.print("    ");
-      else Serial.print("   ");
-      
-      // Pad serial number to 28 chars
-      Serial.print(serial);
-      for (int i = serial.length(); i < 28; i++) {
-        Serial.print(" ");
-      }
-      Serial.print(" ");
-      
-      Serial.println(active ? "Active" : "Inactive");
-    });
-    
-    Serial.println("────────────────────────────────────────────────");
-    Serial.print("Total registered: ");
-    Serial.println(count);
-  }
-  
-  Serial.println();
-}
-
-// List active clients
-void listActiveClients() {
-  Serial.println();
-  Serial.println("╔═══════════════════════════════════════════════╗");
-  Serial.println("║         Active Clients                        ║");
-  Serial.println("╚═══════════════════════════════════════════════╝");
-  Serial.println();
-  
   uint8_t activeCount = 0;
+  uint8_t onlineCount = 0;
   
-  Serial.println("ID    Serial Number                 Subscriptions");
+  Serial.println("ID    Serial Number            Status    Subs");
   Serial.println("────────────────────────────────────────────────");
   
-  broker.listRegisteredClients([&activeCount](uint8_t id, const String& serial, bool active) {
-    if (active) {
+  broker.listRegisteredClients([&activeCount, &onlineCount](uint8_t id, const String& serial, bool registered) {
+    // Only show clients that are registered (registered=true means stored in flash)
+    if (registered) {
       Serial.print(id, DEC);
       if (id < 10) Serial.print("     ");
       else if (id < 100) Serial.print("    ");
       else Serial.print("   ");
       
-      // Pad serial number to 28 chars
+      // Pad serial number to 24 chars
       Serial.print(serial);
-      for (int i = serial.length(); i < 28; i++) {
+      for (int i = serial.length(); i < 24; i++) {
         Serial.print(" ");
       }
       Serial.print(" ");
       
-      Serial.println("-"); // Subscription count could be added
+      // Check if client is online (currently connected)
+      if (broker.isClientOnline(id)) {
+        Serial.print("Online    ");
+        onlineCount++;
+      } else {
+        Serial.print("Offline   ");
+      }
+      
+      // Show subscription count
+      uint8_t subCount = broker.getClientSubscriptionCount(id);
+      Serial.println(subCount);
+      
       activeCount++;
     }
   });
   
   Serial.println("────────────────────────────────────────────────");
-  Serial.print("Active clients: ");
-  Serial.println(activeCount);
+  Serial.print("Registered: ");
+  Serial.print(activeCount);
+  Serial.print("  |  Online: ");
+  Serial.println(onlineCount);
   Serial.println();
 }
 
@@ -390,7 +366,7 @@ void showStats() {
   Serial.println();
   Serial.print("Registered clients:  ");
   Serial.println(broker.getRegisteredClientCount());
-  Serial.print("Active clients:      ");
+  Serial.print("Online clients:      ");
   Serial.println(broker.getClientCount());
   Serial.print("Active topics:       ");
   Serial.println(broker.getSubscriptionCount());

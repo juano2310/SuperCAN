@@ -17,13 +17,18 @@ Client ID to serial number mappings **and topic subscriptions** are **automatica
 Storage operations happen **automatically**:
 
 ```cpp
-broker.begin();                    // ← Loads mappings AND subscriptions from flash automatically
+broker.begin();                    // ← Loads mappings, subscriptions AND ping config from flash automatically
 broker.registerClient("ESP32_001"); // ← Saves to flash automatically
 broker.unregisterClient(0x10);     // ← Saves to flash automatically
 
 // Subscriptions are also persisted automatically
 // When client subscribes, their subscription is saved
 // When client reconnects, subscriptions are restored
+
+// Ping configuration is also persisted automatically
+broker.enableAutoPing(true);       // ← Saves to flash automatically
+broker.setPingInterval(10000);     // ← Saves to flash automatically
+broker.setMaxMissedPings(3);       // ← Saves to flash automatically
 ```
 
 ## Manual Storage Control
@@ -34,14 +39,17 @@ For advanced use cases:
 // Manual save (automatic saves disabled)
 broker.saveMappingsToStorage();
 broker.saveSubscriptionsToStorage();
+broker.savePingConfigToStorage();
 
 // Manual load (useful after external changes)
 broker.loadMappingsFromStorage();
 broker.loadSubscriptionsFromStorage();
+broker.loadPingConfigFromStorage();
 
 // Clear all stored data
 broker.clearStoredMappings();
 broker.clearStoredSubscriptions();
+broker.clearStoredPingConfig();
 ```
 
 ## Storage Size
@@ -55,6 +63,7 @@ Default configuration:
 - Storage per subscription set: 23 bytes (1 + 10×2 + 1)
 - Total client mapping storage: ~1700 bytes
 - Total subscription storage: ~1150 bytes
+- Ping configuration storage: 6 bytes (bool + ulong + uint8_t)
 
 Total memory usage:
 Client Mappings:
@@ -67,7 +76,13 @@ Subscriptions:
 - Subscription data: 23 × 50 = 1150 bytes
 - Subtotal: 1153 bytes
 
-Total: ~2857 bytes (EEPROM size increased to 4096 bytes)
+Ping Configuration:
+- Enabled flag: 1 byte (bool)
+- Interval: 4 bytes (unsigned long)
+- Max missed pings: 1 byte (uint8_t)
+- Subtotal: 6 bytes
+
+Total: ~2863 bytes (EEPROM size: 4096 bytes)
 ```
 
 ## Configuration
@@ -163,6 +178,14 @@ Flash Memory Layout:
 │ ...                                          │
 ├─────────────────────────────────────────────┤
 │ Client Subscriptions #50      [23 bytes]    │
+├─────────────────────────────────────────────┤
+│ PING CONFIGURATION SECTION                  │
+├─────────────────────────────────────────────┤
+│ Auto-Ping Enabled              [1 byte]     │ ← bool
+├─────────────────────────────────────────────┤
+│ Ping Interval (ms)             [4 bytes]    │ ← unsigned long
+├─────────────────────────────────────────────┤
+│ Max Missed Pings               [1 byte]     │ ← uint8_t
 └─────────────────────────────────────────────┘
 ```
 
@@ -222,26 +245,36 @@ broker.updateClientSerial(0x10, "X");  // Update
 client.subscribe("sensor/temp");       // New subscription
 client.unsubscribe("sensor/temp");     // Remove subscription
 
+// Each of these triggers writes to ping config storage:
+broker.enableAutoPing(true);           // Enable/disable auto-ping
+broker.setPingInterval(10000);         // Change ping interval
+broker.setMaxMissedPings(3);           // Change max missed pings
+
 // These do NOT trigger writes:
 broker.getClientIdBySerial("ESP32");   // Read only
 broker.getSerialByClientId(1);         // Read only
 broker.listRegisteredClients(...);     // Read only
 broker.getSubscriptionCount();         // Read only
+broker.isAutoPingEnabled();            // Read only
+broker.getPingInterval();              // Read only
+broker.getMaxMissedPings();            // Read only
 ```
 
 **Estimated lifetime:**
 - 50 clients with average 5 subscription changes/day each
 - 250 writes/day (subscriptions)
 - 50 writes/day (registrations)
-- Total: 300 writes/day × 365 days = 109,500 writes/year
+- 5 writes/day (ping config changes)
+- Total: 305 writes/day × 365 days = 111,325 writes/year
 - ESP32: 100,000 writes = **11+ months per sector** (but ESP32 has wear leveling)
 - Arduino AVR: 100,000 writes = **11+ months** (heavy use)
 - ESP8266: 10,000 writes = **1 month** (very heavy use - minimize subscription changes)
 
-**Recommendation**: For production systems with frequent subscription changes, consider:
+**Recommendation**: For production systems with frequent changes, consider:
 1. Using ESP32 (has built-in wear leveling)
 2. Batching subscription changes when possible
 3. Avoiding rapid subscribe/unsubscribe cycles
+4. Setting ping configuration once during initial setup, not frequently
 
 ## Troubleshooting
 
@@ -284,6 +317,48 @@ if (count >= MAX_CLIENT_MAPPINGS) {
 broker.clearStoredMappings();
 ESP.restart(); // or reset device
 ```
+
+## Ping Configuration Persistence
+
+### Overview
+
+Ping monitoring settings are **automatically saved to flash** and restored on power cycle:
+
+- **ping:on/off** - Auto-ping enabled/disabled state
+- **interval:ms** - Ping interval in milliseconds  
+- **maxmissed:n** - Maximum missed pings before disconnect
+
+### How It Works
+
+```cpp
+// First boot - configure ping monitoring
+broker.begin();
+broker.enableAutoPing(true);      // ← Saved to flash
+broker.setPingInterval(10000);    // ← Saved to flash (10 seconds)
+broker.setMaxMissedPings(3);      // ← Saved to flash
+
+// Power cycle...
+
+// Second boot - settings automatically restored!
+broker.begin();                    // ← Loads ping config from flash
+// Auto-ping is enabled with 10s interval and max 3 missed pings
+// No need to reconfigure!
+```
+
+### Benefits
+
+✅ **Configuration survives power loss** - Settings persist across reboots  
+✅ **No reconfiguration needed** - Broker remembers your settings  
+✅ **Consistent behavior** - Same monitoring parameters every time  
+✅ **Easy deployment** - Configure once, works forever  
+
+### Default Values
+
+If no ping configuration is stored (first boot or after clear), defaults are:
+
+- Auto-ping: **disabled** (`false`)
+- Ping interval: **5000 ms** (5 seconds)
+- Max missed pings: **2**
 
 ## Subscription Persistence Details
 

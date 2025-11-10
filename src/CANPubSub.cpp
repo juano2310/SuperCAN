@@ -160,15 +160,33 @@ bool CANPubSubBroker::begin() {
   _subTableSize = 0;
   _nextClientID = 0x01;
   _nextTempID = 101;
-  _clientCount = 0;
+  _clientCount = 0;  // All clients start as offline after power cycle
   _mappingCount = 0;
   _storedSubCount = 0;
-  _pingStateCount = 0;
+  _pingStateCount = 0;  // Clear ping states - will be reinitialized when clients connect
   
   // Initialize storage and load saved mappings
   initStorage();
   loadMappingsFromStorage();
   loadSubscriptionsFromStorage();
+  loadPingConfigFromStorage();
+  
+  // If auto-ping was enabled, initialize ping states for registered clients
+  // Note: This only sets up ping tracking, clients are NOT marked as online
+  // Clients will be marked online when they send their first message
+  if (_autoPingEnabled) {
+    for (uint8_t i = 0; i < _mappingCount; i++) {
+      if (_clientMappings[i].registered) {
+        initPingState(_clientMappings[i].clientId);
+      }
+    }
+    
+    // Immediately ping all registered clients after power-up to discover who's online
+    // Give a small delay for CAN bus to stabilize
+    delay(100);
+    pingAllClients();
+    _lastPingTime = millis();
+  }
   
   return true;
 }
@@ -242,6 +260,9 @@ void CANPubSubBroker::handleSubscribe() {
   uint8_t clientId = _can->read();
   uint16_t topicHash = (_can->read() << 8) | _can->read();
   
+  // Track client activity (marks as online)
+  trackClientActivity(clientId);
+  
   // Read topic name if available (for broker-side topic mapping)
   String topicName = "";
   if (_can->available() > 0) {
@@ -258,23 +279,19 @@ void CANPubSubBroker::handleSubscribe() {
   
   addSubscription(clientId, topicHash);
   
-  // Track connected client
-  bool found = false;
-  for (uint8_t i = 0; i < _clientCount; i++) {
-    if (_connectedClients[i] == clientId) {
-      found = true;
+  // Restore stored subscriptions for this client (if any) - only on first connection
+  static uint8_t restoredClients[MAX_CLIENT_MAPPINGS];
+  static uint8_t restoredCount = 0;
+  bool alreadyRestored = false;
+  for (uint8_t i = 0; i < restoredCount; i++) {
+    if (restoredClients[i] == clientId) {
+      alreadyRestored = true;
       break;
     }
   }
-  if (!found && _clientCount < 256) {
-    _connectedClients[_clientCount++] = clientId;
-    
-    // Restore stored subscriptions for this client (if any)
+  if (!alreadyRestored && restoredCount < MAX_CLIENT_MAPPINGS) {
     restoreClientSubscriptions(clientId);
-    
-    if (_onClientConnect) {
-      _onClientConnect(clientId);
-    }
+    restoredClients[restoredCount++] = clientId;
   }
 }
 
@@ -284,6 +301,9 @@ void CANPubSubBroker::handleUnsubscribe() {
   uint8_t clientId = _can->read();
   uint16_t topicHash = (_can->read() << 8) | _can->read();
   
+  // Track client activity (marks as online)
+  trackClientActivity(clientId);
+  
   removeSubscription(clientId, topicHash);
 }
 
@@ -292,6 +312,9 @@ void CANPubSubBroker::handlePublish() {
   
   uint8_t publisherId = _can->read();
   uint16_t topicHash = (_can->read() << 8) | _can->read();
+  
+  // Track client activity (marks as online)
+  trackClientActivity(publisherId);
   
   // Get topic name from stored mapping (learned from SUBSCRIBE)
   String topicName = getTopicName(topicHash);
@@ -316,6 +339,9 @@ void CANPubSubBroker::handleDirectMessage() {
   
   uint8_t senderId = _can->read();
   
+  // Track client activity (marks as online)
+  trackClientActivity(senderId);
+  
   String message = "";
   while (_can->available()) {
     message += (char)_can->read();
@@ -339,6 +365,9 @@ void CANPubSubBroker::handlePing() {
   
   uint8_t clientId = _can->read();
   
+  // Track client activity (marks as online)
+  trackClientActivity(clientId);
+  
   // Send pong response
   _can->beginPacket(CAN_PS_PONG);
   _can->write(CAN_PS_BROKER_ID);
@@ -354,18 +383,14 @@ void CANPubSubBroker::handlePong() {
   
   if (targetId != CAN_PS_BROKER_ID) return;
   
-  // Update client's last pong time and reset missed pings
-  int index = findPingState(senderId);
-  if (index >= 0) {
-    _pingStates[index].lastPongTime = millis();
-    _pingStates[index].missedPings = 0;
-  }
+  // Track client activity (marks as online and updates ping state)
+  trackClientActivity(senderId);
 }
 
 void CANPubSubBroker::pingAllClients() {
-  // Ping all active registered clients
+  // Ping all registered clients
   for (uint8_t i = 0; i < _mappingCount; i++) {
-    if (_clientMappings[i].active) {
+    if (_clientMappings[i].registered) {
       uint8_t clientId = _clientMappings[i].clientId;
       
       _can->beginPacket(CAN_PS_PING);
@@ -390,13 +415,18 @@ void CANPubSubBroker::checkClientTimeouts() {
     uint8_t clientId = _pingStates[i].clientId;
     
     if (_pingStates[i].missedPings >= _maxMissedPings) {
-      // Find the client mapping
-      int mappingIdx = findClientMappingById(clientId);
-      if (mappingIdx >= 0 && _clientMappings[mappingIdx].active) {
-        // Mark client as inactive
-        _clientMappings[mappingIdx].active = false;
-        
-        // Remove from connected clients list
+      // Check if client is currently online
+      bool wasOnline = false;
+      for (uint8_t j = 0; j < _clientCount; j++) {
+        if (_connectedClients[j] == clientId) {
+          wasOnline = true;
+          break;
+        }
+      }
+      
+      // Only process if client was online (avoid duplicate disconnect callbacks)
+      if (wasOnline) {
+        // Remove from connected clients list (mark offline)
         for (uint8_t j = 0; j < _clientCount; j++) {
           if (_connectedClients[j] == clientId) {
             // Shift remaining clients
@@ -412,10 +442,10 @@ void CANPubSubBroker::checkClientTimeouts() {
         if (_onClientDisconnect) {
           _onClientDisconnect(clientId);
         }
-        
-        // Save updated state
-        saveMappingsToStorage();
       }
+      
+      // Note: Client remains registered (active=true) in mappings
+      // and will be marked online again when it reconnects
     }
   }
 }
@@ -427,6 +457,9 @@ void CANPubSubBroker::handlePeerMessage() {
   
   uint8_t senderId = _can->read();
   uint8_t targetId = _can->read();
+  
+  // Track client activity (marks as online)
+  trackClientActivity(senderId);
   
   // Verify sender has a permanent ID (registered with serial number)
   int senderIndex = findClientMappingById(senderId);
@@ -616,6 +649,7 @@ void CANPubSubBroker::onDirectMessage(DirectMessageCallback callback) {
 
 void CANPubSubBroker::setPingInterval(unsigned long intervalMs) {
   _pingInterval = intervalMs;
+  savePingConfigToStorage();
 }
 
 unsigned long CANPubSubBroker::getPingInterval() {
@@ -627,13 +661,14 @@ void CANPubSubBroker::enableAutoPing(bool enable) {
   if (enable) {
     _lastPingTime = millis();
     
-    // Initialize ping state for all active registered clients
+    // Initialize ping state for all registered clients
     for (uint8_t i = 0; i < _mappingCount; i++) {
-      if (_clientMappings[i].active) {
+      if (_clientMappings[i].registered) {
         initPingState(_clientMappings[i].clientId);
       }
     }
   }
+  savePingConfigToStorage();
 }
 
 bool CANPubSubBroker::isAutoPingEnabled() {
@@ -642,6 +677,7 @@ bool CANPubSubBroker::isAutoPingEnabled() {
 
 void CANPubSubBroker::setMaxMissedPings(uint8_t maxMissed) {
   _maxMissedPings = maxMissed;
+  savePingConfigToStorage();
 }
 
 uint8_t CANPubSubBroker::getMaxMissedPings() {
@@ -671,6 +707,35 @@ void CANPubSubBroker::initPingState(uint8_t clientId) {
     _pingStates[_pingStateCount].lastPongTime = millis();
     _pingStates[_pingStateCount].missedPings = 0;
     _pingStateCount++;
+  }
+}
+
+void CANPubSubBroker::trackClientActivity(uint8_t clientId) {
+  // Add client to connected clients list if not already present
+  bool found = false;
+  for (uint8_t i = 0; i < _clientCount; i++) {
+    if (_connectedClients[i] == clientId) {
+      found = true;
+      break;
+    }
+  }
+  
+  if (!found && _clientCount < 256) {
+    _connectedClients[_clientCount++] = clientId;
+    
+    // Call connect callback if this is a new connection
+    if (_onClientConnect) {
+      _onClientConnect(clientId);
+    }
+  }
+  
+  // Update ping state if auto-ping is enabled
+  if (_autoPingEnabled) {
+    int index = findPingState(clientId);
+    if (index >= 0) {
+      _pingStates[index].lastPongTime = millis();
+      _pingStates[index].missedPings = 0;
+    }
   }
 }
 
@@ -798,21 +863,8 @@ void CANPubSubBroker::handleIdRequestWithSerial() {
     _can->endPacket();
   }
   
-  // Track connected client if not already tracked
-  bool found = false;
-  for (uint8_t i = 0; i < _clientCount; i++) {
-    if (_connectedClients[i] == assignedId) {
-      found = true;
-      break;
-    }
-  }
-  if (!found && _clientCount < 256) {
-    _connectedClients[_clientCount++] = assignedId;
-    
-    if (_onClientConnect) {
-      _onClientConnect(assignedId);
-    }
-  }
+  // Track connected client (marks as online)
+  trackClientActivity(assignedId);
   
   // Restore stored subscriptions for this client (if any)
   if (hasStoredSubs) {
@@ -826,8 +878,8 @@ uint8_t CANPubSubBroker::findOrCreateClientId(const String& serialNumber) {
   int index = findClientMapping(serialNumber);
   
   if (index >= 0) {
-    // Found existing mapping, mark as active and return the same ID
-    _clientMappings[index].active = true;
+    // Found existing mapping, mark as registered and return the same ID
+    _clientMappings[index].registered = true;
     saveMappingsToStorage(); // Save state change
     
     // Initialize ping tracking if auto-ping is enabled
@@ -842,7 +894,7 @@ uint8_t CANPubSubBroker::findOrCreateClientId(const String& serialNumber) {
   if (_mappingCount < MAX_CLIENT_MAPPINGS) {
     _clientMappings[_mappingCount].clientId = _nextClientID;
     _clientMappings[_mappingCount].setSerial(serialNumber);
-    _clientMappings[_mappingCount].active = true;
+    _clientMappings[_mappingCount].registered = true;
     _mappingCount++;
     
     uint8_t assignedId = _nextClientID;
@@ -891,7 +943,7 @@ uint8_t CANPubSubBroker::registerClient(const String& serialNumber) {
 bool CANPubSubBroker::unregisterClient(uint8_t clientId) {
   int index = findClientMappingById(clientId);
   if (index >= 0) {
-    _clientMappings[index].active = false;
+    _clientMappings[index].registered = false;
     // Remove all subscriptions for this client
     removeAllSubscriptions(clientId);
     saveMappingsToStorage(); // Save state change
@@ -903,7 +955,7 @@ bool CANPubSubBroker::unregisterClient(uint8_t clientId) {
 bool CANPubSubBroker::unregisterClientBySerial(const String& serialNumber) {
   int index = findClientMapping(serialNumber);
   if (index >= 0) {
-    _clientMappings[index].active = false;
+    _clientMappings[index].registered = false;
     // Remove all subscriptions for this client
     removeAllSubscriptions(_clientMappings[index].clientId);
     saveMappingsToStorage(); // Save state change
@@ -943,17 +995,48 @@ bool CANPubSubBroker::updateClientSerial(uint8_t clientId, const String& newSeri
 }
 
 uint8_t CANPubSubBroker::getRegisteredClientCount() {
-  return _mappingCount;
+  // Count only registered clients (registered=true)
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < _mappingCount; i++) {
+    if (_clientMappings[i].registered) {
+      count++;
+    }
+  }
+  return count;
 }
 
-void CANPubSubBroker::listRegisteredClients(std::function<void(uint8_t id, const String& serial, bool active)> callback) {
+void CANPubSubBroker::listRegisteredClients(std::function<void(uint8_t id, const String& serial, bool registered)> callback) {
   if (!callback) return;
   
   for (uint8_t i = 0; i < _mappingCount; i++) {
     callback(_clientMappings[i].clientId, 
              _clientMappings[i].getSerial(), 
-             _clientMappings[i].active);
+             _clientMappings[i].registered);
   }
+}
+
+bool CANPubSubBroker::isClientOnline(uint8_t clientId) {
+  // Check if client is in the connected clients list
+  for (uint8_t i = 0; i < _clientCount; i++) {
+    if (_connectedClients[i] == clientId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+uint8_t CANPubSubBroker::getClientSubscriptionCount(uint8_t clientId) {
+  uint8_t count = 0;
+  // Count how many topics this client is subscribed to
+  for (uint8_t i = 0; i < _subTableSize; i++) {
+    for (uint8_t j = 0; j < _subscriptions[i].subCount; j++) {
+      if (_subscriptions[i].subscribers[j] == clientId) {
+        count++;
+        break; // Client found in this topic, move to next topic
+      }
+    }
+  }
+  return count;
 }
 
 void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderId, const uint8_t* data, size_t length) {
@@ -1045,22 +1128,9 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       
       addSubscription(clientId, topicHash);
       
-      // Track connected client
-      bool found = false;
-      for (uint8_t i = 0; i < _clientCount; i++) {
-        if (_connectedClients[i] == clientId) {
-          found = true;
-          break;
-        }
-      }
-      if (!found && _clientCount < 256) {
-        _connectedClients[_clientCount++] = clientId;
-        restoreClientSubscriptions(clientId);
-        
-        if (_onClientConnect) {
-          _onClientConnect(clientId);
-        }
-      }
+      // Track client activity (marks as online)
+      trackClientActivity(clientId);
+      
       break;
     }
     
@@ -1070,12 +1140,16 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       // Note: publisherId was already extracted by processExtendedFrame from first byte
       if (length < 2) return;
       
+      uint8_t publisherId = senderId; // Use the extracted sender ID
       uint16_t topicHash = (data[0] << 8) | data[1];
       String message = "";
       
       for (size_t i = 2; i < length; i++) {
         message += (char)data[i];
       }
+      
+      // Track client activity (marks as online)
+      trackClientActivity(publisherId);
       
       String topicName = getTopicName(topicHash);
       
@@ -1091,6 +1165,9 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       // Extended direct message from client to broker
       // Format (in buffer): [message...]
       // Note: senderId (client ID) was already extracted by processExtendedFrame from first byte
+      
+      // Track client activity (marks as online)
+      trackClientActivity(senderId);
       
       String message = "";
       for (size_t i = 0; i < length; i++) {
@@ -1117,6 +1194,9 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       if (length < 1) return;
       
       uint8_t targetId = data[0];
+      
+      // Track client activity (marks as online)
+      trackClientActivity(senderId);
       
       // Verify sender has a permanent ID (registered with serial number)
       int senderIndex = findClientMappingById(senderId);
@@ -1170,12 +1250,15 @@ CANPubSubClient::CANPubSubClient(CANControllerClass& can)
     _subscribedTopicCount(0),
     _lastPing(0),
     _lastPong(0),
+    _lastPeerSenderId(0),
+    _lastPeerMsgTime(0),
     _onMessage(nullptr),
     _onDirectMessage(nullptr),
     _onConnect(nullptr),
     _onDisconnect(nullptr),
     _onPong(nullptr) {
   memset(_subscribedTopics, 0, sizeof(_subscribedTopics));
+  memset(_lastPeerMessage, 0, sizeof(_lastPeerMessage));
 }
 
 bool CANPubSubClient::begin(unsigned long timeout) {
@@ -1282,7 +1365,37 @@ void CANPubSubClient::handleMessage(int packetSize) {
       handleDirectMessageReceived();
       break;
     case CAN_PS_PEER_MSG:
-      // Peer messages are handled by onExtendedMessageComplete() only
+      // Handle standard peer messages (extended peer messages go through onExtendedMessageComplete)
+      if (_can->available() >= 2) {
+        uint8_t senderId = _can->read();
+        uint8_t targetId = _can->read();
+        
+        if (targetId == _clientId) {
+          // This message is for us
+          String message = "";
+          while (_can->available()) {
+            message += (char)_can->read();
+          }
+          
+          // Deduplicate: skip if same sender and message within 50ms
+          unsigned long now = millis();
+          bool isDuplicate = (senderId == _lastPeerSenderId && 
+                              message == String(_lastPeerMessage) &&
+                              (now - _lastPeerMsgTime) < 50);
+          
+          if (!isDuplicate && _onDirectMessage) {
+            _onDirectMessage(senderId, message);
+            
+            // Track this message to detect duplicates
+            _lastPeerSenderId = senderId;
+            _lastPeerMsgTime = now;
+            strncpy(_lastPeerMessage, message.c_str(), 31);
+            _lastPeerMessage[31] = '\0';
+          }
+        }
+        // Note: Messages not for us are silently discarded to avoid processing
+        // forwarded peer messages intended for other clients
+      }
       break;
     case CAN_PS_PING:
       // Broker is pinging us, respond with pong
@@ -1630,6 +1743,13 @@ void CANPubSubClient::onPong(void (*callback)()) {
   _onPong = callback;
 }
 
+unsigned long CANPubSubClient::getLastPingTime() {
+  if (_lastPong == 0 || _lastPing == 0 || _lastPong < _lastPing) {
+    return 0; // No valid pong received yet
+  }
+  return _lastPong - _lastPing;
+}
+
 bool CANPubSubClient::isSubscribed(const String& topic) {
   uint16_t topicHash = hashTopic(topic);
   for (uint8_t i = 0; i < _subscribedTopicCount; i++) {
@@ -1785,9 +1905,21 @@ void CANPubSubClient::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
         message += (char)data[i];
       }
       
+      // Deduplicate: skip if same sender and message within 50ms
+      unsigned long now = millis();
+      bool isDuplicate = (senderId == _lastPeerSenderId && 
+                          message == String(_lastPeerMessage) &&
+                          (now - _lastPeerMsgTime) < 50);
+      
       // Call direct message callback (reuse for peer messages)
-      if (_onDirectMessage) {
+      if (!isDuplicate && _onDirectMessage) {
         _onDirectMessage(senderId, message);
+        
+        // Track this message to detect duplicates
+        _lastPeerSenderId = senderId;
+        _lastPeerMsgTime = now;
+        strncpy(_lastPeerMessage, message.c_str(), 31);
+        _lastPeerMessage[31] = '\0';
       }
       break;
     }
@@ -2130,4 +2262,96 @@ bool CANPubSubBroker::clearStoredSubscriptions() {
     #endif
     return true;
   #endif
+}
+
+// ===== Ping Configuration Persistence Implementation =====
+
+bool CANPubSubBroker::loadPingConfigFromStorage() {
+  #ifdef ESP32
+    // ESP32 implementation using Preferences
+    // Load ping configuration values (use defaults if not set)
+    _autoPingEnabled = _preferences.getBool("pingEnabled", false);
+    _pingInterval = _preferences.getULong("pingInterval", 5000);
+    _maxMissedPings = _preferences.getUChar("pingMaxMissed", 2);
+    
+    return true;
+    
+  #else
+    // Arduino EEPROM implementation
+    // Calculate offset (after client mappings and subscriptions)
+    int addr = sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t) + 
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientMapping)) +
+               sizeof(uint16_t) + sizeof(uint8_t) +
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientSubscriptions));
+    
+    // Read ping configuration
+    bool enabled;
+    unsigned long interval;
+    uint8_t maxMissed;
+    
+    EEPROM.get(addr, enabled);
+    addr += sizeof(bool);
+    
+    EEPROM.get(addr, interval);
+    addr += sizeof(unsigned long);
+    
+    EEPROM.get(addr, maxMissed);
+    
+    // Validate values before applying (simple sanity check)
+    if (interval > 0 && interval < 3600000 && maxMissed > 0 && maxMissed < 255) {
+      _autoPingEnabled = enabled;
+      _pingInterval = interval;
+      _maxMissedPings = maxMissed;
+      return true;
+    }
+    
+    // Invalid data, use defaults
+    _autoPingEnabled = false;
+    _pingInterval = 5000;
+    _maxMissedPings = 2;
+    return false;
+  #endif
+}
+
+bool CANPubSubBroker::savePingConfigToStorage() {
+  #ifdef ESP32
+    // ESP32 implementation using Preferences
+    _preferences.putBool("pingEnabled", _autoPingEnabled);
+    _preferences.putULong("pingInterval", _pingInterval);
+    _preferences.putUChar("pingMaxMissed", _maxMissedPings);
+    
+    return true;
+    
+  #else
+    // Arduino EEPROM implementation
+    // Calculate offset (after client mappings and subscriptions)
+    int addr = sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t) + 
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientMapping)) +
+               sizeof(uint16_t) + sizeof(uint8_t) +
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientSubscriptions));
+    
+    // Write ping configuration
+    EEPROM.put(addr, _autoPingEnabled);
+    addr += sizeof(bool);
+    
+    EEPROM.put(addr, _pingInterval);
+    addr += sizeof(unsigned long);
+    
+    EEPROM.put(addr, _maxMissedPings);
+    
+    #if defined(ESP8266)
+      EEPROM.commit();
+    #endif
+    
+    return true;
+  #endif
+}
+
+bool CANPubSubBroker::clearStoredPingConfig() {
+  // Reset to defaults
+  _autoPingEnabled = false;
+  _pingInterval = 5000;
+  _maxMissedPings = 2;
+  
+  return savePingConfigToStorage();
 }

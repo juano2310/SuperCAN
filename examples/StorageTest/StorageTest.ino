@@ -56,7 +56,7 @@ void setup() {
   if (count > 0) {
     Serial.println("Previously registered clients:");
     Serial.println("─────────────────────────────────────────────────");
-    broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
+    broker.listRegisteredClients([](uint8_t id, const String& serial, bool registered) {
       Serial.print("  ID: ");
       Serial.print(id, DEC);
       if (id < 10) Serial.print("   ");
@@ -65,7 +65,7 @@ void setup() {
       Serial.print(" SN: ");
       Serial.print(serial);
       Serial.print("  [");
-      Serial.print(active ? "Active" : "Inactive");
+      Serial.print(registered ? "Registered" : "Unregistered");
       Serial.println("]");
     });
     Serial.println("─────────────────────────────────────────────────\n");
@@ -154,7 +154,7 @@ void listClients() {
   if (count == 0) {
     Serial.println("  (none)");
   } else {
-    broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
+    broker.listRegisteredClients([](uint8_t id, const String& serial, bool registered) {
       Serial.print("  ID: ");
       Serial.print(id, DEC);
       if (id < 10) Serial.print("   ");
@@ -169,7 +169,7 @@ void listClients() {
       }
       
       Serial.print("  [");
-      Serial.print(active ? "Active  " : "Inactive");
+      Serial.print(registered ? "Registered  " : "Unregistered");
       Serial.println("]");
     });
   }

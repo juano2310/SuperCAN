@@ -153,9 +153,14 @@ void loop() {
         String idStr = input.substring(4, colonPos);
         String message = input.substring(colonPos + 1);
         uint8_t clientId = (uint8_t)idStr.toInt();
-        broker.sendDirectMessage(clientId, message);
-        Serial.print("Sent direct message to client ");
-        Serial.println(clientId, DEC);
+        
+        if (clientId == 0) {
+          Serial.println("✗ Error: Cannot send message to broker itself (ID 0)");
+        } else {
+          broker.sendDirectMessage(clientId, message);
+          Serial.print("Sent direct message to client ");
+          Serial.println(clientId, DEC);
+        }
       } else {
         Serial.println("Usage: msg:clientId:message (clientId in decimal)");
       }
@@ -216,17 +221,17 @@ void listClientsAndSubscriptions() {
   Serial.println(broker.getSubscriptionCount());
   
   Serial.println("\nRegistered Clients:");
-  Serial.println("ID   Active  Serial Number");
+  Serial.println("ID   Registered  Serial Number");
   Serial.println("────────────────────────────────");
   
-  broker.listRegisteredClients([](uint8_t id, const String& serial, bool active) {
+  broker.listRegisteredClients([](uint8_t id, const String& serial, bool registered) {
     Serial.print(id, DEC);
     if (id < 10) Serial.print("  ");
     else if (id < 100) Serial.print(" ");
     
     Serial.print("  ");
-    Serial.print(active ? "✓" : "✗");
-    Serial.print("       ");
+    Serial.print(registered ? "✓" : "✗");
+    Serial.print("           ");
     Serial.println(serial);
   });
   
@@ -274,10 +279,10 @@ void listTopics() {
 // Show broker statistics
 void showStats() {
   Serial.println("\n=== Broker Statistics ===");
-  Serial.print("Connected clients: ");
-  Serial.println(broker.getClientCount());
   Serial.print("Registered clients: ");
   Serial.println(broker.getRegisteredClientCount());
+  Serial.print("Online clients: ");
+  Serial.println(broker.getClientCount());
   Serial.print("Active topics: ");
   Serial.println(broker.getSubscriptionCount());
   Serial.print("Auto-ping: ");

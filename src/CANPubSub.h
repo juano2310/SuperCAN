@@ -81,7 +81,7 @@ struct TopicMapping {
 struct ClientMapping {
   uint8_t clientId;
   char serialNumber[MAX_SERIAL_LENGTH];
-  bool active;
+  bool registered;  // true = registered and stored in flash, false = unregistered
   
   // Helper methods for String compatibility
   void setSerial(const String& serial) {
@@ -114,7 +114,7 @@ struct ClientSubscriptions {
 #define STORAGE_NAMESPACE "CANPubSub"
 #define STORAGE_MAGIC 0xCABE     // Magic number to verify valid data
 #define STORAGE_SUB_MAGIC 0xCAFF // Magic number for subscription data
-#define EEPROM_SIZE 4096         // EEPROM size for non-ESP32 platforms (increased for subscriptions)
+#define EEPROM_SIZE 4096         // EEPROM size for non-ESP32 platforms (client mappings + subscriptions + ping config)
 
 // Base pub/sub class
 class CANPubSubBase {
@@ -189,7 +189,9 @@ public:
   String getSerialByClientId(uint8_t clientId);
   bool updateClientSerial(uint8_t clientId, const String& newSerial);
   uint8_t getRegisteredClientCount();
-  void listRegisteredClients(std::function<void(uint8_t id, const String& serial, bool active)> callback);
+  void listRegisteredClients(std::function<void(uint8_t id, const String& serial, bool registered)> callback);
+  bool isClientOnline(uint8_t clientId);
+  uint8_t getClientSubscriptionCount(uint8_t clientId);
   
   // Extended message handling override
   void onExtendedMessageComplete(uint8_t msgType, uint8_t senderId, const uint8_t* data, size_t length) override;
@@ -203,6 +205,11 @@ public:
   bool loadSubscriptionsFromStorage();
   bool saveSubscriptionsToStorage();
   bool clearStoredSubscriptions();
+  
+  // Ping configuration persistence
+  bool loadPingConfigFromStorage();
+  bool savePingConfigToStorage();
+  bool clearStoredPingConfig();
   
 private:
   // Subscription management
@@ -234,6 +241,7 @@ private:
   void checkClientTimeouts();
   int findPingState(uint8_t clientId);
   void initPingState(uint8_t clientId);
+  void trackClientActivity(uint8_t clientId);
   
   // Data members
   Subscription _subscriptions[MAX_SUBSCRIPTIONS];
@@ -324,6 +332,9 @@ public:
   // Ping response callback
   void onPong(void (*callback)());
   
+  // Get last ping round-trip time in milliseconds (0 if no pong received yet)
+  unsigned long getLastPingTime();
+  
   // Extended message handling override
   void onExtendedMessageComplete(uint8_t msgType, uint8_t senderId, const uint8_t* data, size_t length) override;
   
@@ -347,6 +358,11 @@ private:
   uint8_t _subscribedTopicCount;
   unsigned long _lastPing;
   unsigned long _lastPong;
+  
+  // Peer message deduplication
+  uint8_t _lastPeerSenderId;
+  unsigned long _lastPeerMsgTime;
+  char _lastPeerMessage[32];
   
   // Callbacks
   MessageCallback _onMessage;

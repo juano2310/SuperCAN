@@ -242,9 +242,78 @@ broker.broadcastMessage(hash, "System restart");
 uint8_t getClientCount()
 ```
 
-Get the number of connected clients.
+Get the number of online (currently connected) clients.
 
-**Returns:** Number of connected clients
+**Returns:** Number of online clients
+
+**Note:** Clients are automatically marked as online when they send any message to the broker (subscribe, publish, ping, etc.). This count represents clients that have recently communicated with the broker.
+
+---
+
+#### getRegisteredClientCount()
+
+```cpp
+uint8_t getRegisteredClientCount()
+```
+
+Get the number of registered clients (with persistent IDs stored in flash memory).
+
+**Returns:** Number of registered clients
+
+**Example:**
+```cpp
+Serial.print("Registered clients: ");
+Serial.println(broker.getRegisteredClientCount());
+Serial.print("Online clients: ");
+Serial.println(broker.getClientCount());
+```
+
+---
+
+#### isClientOnline()
+
+```cpp
+bool isClientOnline(uint8_t clientId)
+```
+
+Check if a specific client is currently online (has recently sent a message).
+
+**Parameters:**
+- `clientId` - Client ID to check
+
+**Returns:** `true` if client is online, `false` otherwise
+
+**Example:**
+```cpp
+if (broker.isClientOnline(5)) {
+  Serial.println("Client 5 is online");
+}
+```
+
+---
+
+#### getClientSubscriptionCount()
+
+```cpp
+uint8_t getClientSubscriptionCount(uint8_t clientId)
+```
+
+Get the number of topics a specific client is subscribed to.
+
+**Parameters:**
+- `clientId` - Client ID to query
+
+**Returns:** Number of topics the client is subscribed to
+
+**Example:**
+```cpp
+uint8_t subCount = broker.getClientSubscriptionCount(clientId);
+Serial.print("Client ");
+Serial.print(clientId);
+Serial.print(" has ");
+Serial.print(subCount);
+Serial.println(" subscriptions");
+```
 
 ---
 

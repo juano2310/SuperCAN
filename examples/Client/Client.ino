@@ -181,7 +181,11 @@ void onMessage(uint16_t topicHash, const String& topic, const String& message) {
 
 // Callback when a direct message is received
 void onDirectMessage(uint8_t senderId, const String& message) {
-  Serial.print("Direct message from ");
+  if (senderId == client.getClientId()) {
+    Serial.print("Self message from ID ");
+  } else {
+    Serial.print("Direct message from ");
+  }
   Serial.print(senderId, DEC);
   Serial.print(": ");
   Serial.println(message);
@@ -189,9 +193,10 @@ void onDirectMessage(uint8_t senderId, const String& message) {
 
 // Callback when broker pong is received
 void onPong() {
+  unsigned long rtt = client.getLastPingTime();
   Serial.print(">>> Pong received from broker [");
-  Serial.print(millis() / 1000);
-  Serial.println("s]");
+  Serial.print(rtt);
+  Serial.println("ms]");
 }
 
 // Show connection status
