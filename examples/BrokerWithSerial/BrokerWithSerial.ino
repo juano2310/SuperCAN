@@ -8,6 +8,8 @@
   - Client registration with serial numbers
   - Persistent ID assignment (same serial = same ID)
   - FLASH MEMORY STORAGE - Mappings survive power outages!
+  - Optional auto-ping for connection monitoring
+  - Client disconnect detection on timeout
   - Client management (add, edit, remove)
   - Serial command interface for administration
   
@@ -27,10 +29,14 @@
   - pub:topic:msg - Publish message to a topic
   - msg:id:msg    - Send direct message to client
   - stats         - Show broker statistics
-  - unreg:id      - Unregister client by ID (hex)
+  - unreg:id      - Unregister client by ID (decimal)
   - unreg:SN      - Unregister client by serial number
   - find:SN       - Find client ID by serial number
   - clear         - Clear all stored mappings
+  - ping:on       - Enable auto-ping
+  - ping:off      - Disable auto-ping
+  - interval:ms   - Set ping interval (ms)
+  - maxmissed:n   - Set max missed pings
   
   Created 2025
   by Juan Pablo Risso
@@ -80,8 +86,15 @@ void setup() {
   
   // Setup callbacks
   broker.onClientConnect(onClientConnect);
+  broker.onClientDisconnect(onClientDisconnect);
   broker.onPublish(onPublish);
   broker.onDirectMessage(onDirectMessage);
+  
+  // Optional: Enable auto-ping for connection monitoring
+  // Uncomment these lines to enable automatic client health checks
+  // broker.setPingInterval(5000);      // Ping every 5 seconds
+  // broker.setMaxMissedPings(2);       // Mark inactive after 2 missed pings
+  // broker.enableAutoPing(true);       // Enable automatic pinging
   
   Serial.println();
   Serial.println("Broker ready! (Mappings stored in flash memory)");
@@ -97,6 +110,10 @@ void setup() {
   Serial.println("  unreg:SN       - Unregister by serial number");
   Serial.println("  find:SN        - Find client ID by serial");
   Serial.println("  clear          - Clear all stored mappings");
+  Serial.println("  ping:on        - Enable auto-ping");
+  Serial.println("  ping:off       - Disable auto-ping");
+  Serial.println("  interval:ms    - Set ping interval (ms)");
+  Serial.println("  maxmissed:n    - Set max missed pings");
   Serial.println("─────────────────────────────────────────────────");
   Serial.println();
 }
@@ -156,6 +173,35 @@ void loop() {
     } else if (input == "clear") {
       clearAllMappings();
       
+    } else if (input == "ping:on") {
+      broker.enableAutoPing(true);
+      Serial.println("Auto-ping enabled");
+      
+    } else if (input == "ping:off") {
+      broker.enableAutoPing(false);
+      Serial.println("Auto-ping disabled");
+      
+    } else if (input.startsWith("interval:")) {
+      unsigned long interval = input.substring(9).toInt();
+      if (interval >= 1000) {
+        broker.setPingInterval(interval);
+        Serial.print("Ping interval set to ");
+        Serial.print(interval);
+        Serial.println(" ms");
+      } else {
+        Serial.println("Interval must be >= 1000 ms");
+      }
+      
+    } else if (input.startsWith("maxmissed:")) {
+      uint8_t maxMissed = input.substring(10).toInt();
+      if (maxMissed >= 1 && maxMissed <= 10) {
+        broker.setMaxMissedPings(maxMissed);
+        Serial.print("Max missed pings set to ");
+        Serial.println(maxMissed);
+      } else {
+        Serial.println("Max missed must be 1-10");
+      }
+      
     } else if (input.length() > 0) {
       Serial.println("Unknown command. Type a command or see list above.");
     }
@@ -174,6 +220,20 @@ void onClientConnect(uint8_t clientId) {
     Serial.print(")");
   }
   Serial.println();
+}
+
+// Callback when a client disconnects (timeout)
+void onClientDisconnect(uint8_t clientId) {
+  String serial = broker.getSerialByClientId(clientId);
+  
+  Serial.print(">>> Client disconnected: ");
+  Serial.print(clientId, DEC);
+  if (serial.length() > 0) {
+    Serial.print(" (SN: ");
+    Serial.print(serial);
+    Serial.print(")");
+  }
+  Serial.println(" (timeout)");
 }
 
 // Callback when a message is published
@@ -334,6 +394,15 @@ void showStats() {
   Serial.println(broker.getClientCount());
   Serial.print("Active topics:       ");
   Serial.println(broker.getSubscriptionCount());
+  Serial.print("Auto-ping:           ");
+  Serial.println(broker.isAutoPingEnabled() ? "Enabled" : "Disabled");
+  if (broker.isAutoPingEnabled()) {
+    Serial.print("  Interval:          ");
+    Serial.print(broker.getPingInterval());
+    Serial.println(" ms");
+    Serial.print("  Max missed:        ");
+    Serial.println(broker.getMaxMissedPings());
+  }
   Serial.print("Uptime:              ");
   Serial.print(millis() / 1000);
   Serial.println(" seconds");

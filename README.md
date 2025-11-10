@@ -213,7 +213,7 @@ See the [arduino-CAN examples](https://github.com/sandeepmistry/arduino-CAN/tree
 - Subscribe/unsubscribe to topics
 - Publish messages to topics (supports extended frames for long messages)
 - Send direct messages to broker (supports extended frames for long messages)
-- Ping/pong for connection monitoring
+- Automatic ping/pong for connection monitoring with configurable timeouts
 - Event callbacks for all message types
 - Topic name tracking for readable display
 
@@ -257,6 +257,19 @@ The pub/sub protocol can be configured by modifying constants in `CANPubSub.h`:
 6. **Client is fully restored** with same ID and all subscriptions intact
 
 Topics are hashed to 16-bit values for efficient CAN bus transmission. Extended frames are automatically used for messages longer than 8 bytes.
+
+## Documentation
+
+- [Getting Started Guide](docs/GETTING_STARTED.md)
+- [Quick Reference](docs/QUICK_REFERENCE.md)
+- [Pub/Sub API](docs/PUBSUB_API.md)
+- [Pub/Sub Protocol](docs/PUBSUB_PROTOCOL.md)
+- [Serial Number Management](docs/SERIAL_NUMBER_MANAGEMENT.md)
+- [Ping/Pong Connection Monitoring](docs/PING_MONITORING.md)
+- [Peer-to-Peer Messaging](docs/PEER_TO_PEER.md)
+- [Extended Frames](docs/EXTENDED_FRAMES.md)
+- [Flash Storage](docs/FLASH_STORAGE.md)
+- [Architecture](docs/ARCHITECTURE.md)
 
 ## Comparison: Traditional CAN vs Pub/Sub Protocol
 

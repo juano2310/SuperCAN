@@ -83,6 +83,7 @@ void setup() {
   client.onConnect(onConnect);
   client.onMessage(onMessage);
   client.onDirectMessage(onDirectMessage);
+  client.onPong(onPong);
   
   // Connect to broker with serial number
   Serial.println("Connecting to broker...");
@@ -247,6 +248,13 @@ void onDirectMessage(uint8_t senderId, const String& message) {
     Serial.print("): ");
   }
   Serial.println(message);
+}
+
+// Callback when broker pong is received
+void onPong() {
+  Serial.print(">>> Pong from broker [");
+  Serial.print(millis() / 1000);
+  Serial.println("s]");
 }
 
 // Show connection status

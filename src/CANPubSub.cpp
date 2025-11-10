@@ -140,6 +140,11 @@ CANPubSubBroker::CANPubSubBroker(CANControllerClass& can)
     _clientCount(0),
     _mappingCount(0),
     _storedSubCount(0),
+    _pingStateCount(0),
+    _pingInterval(5000),
+    _autoPingEnabled(false),
+    _maxMissedPings(2),
+    _lastPingTime(0),
     _onClientConnect(nullptr),
     _onClientDisconnect(nullptr),
     _onPublish(nullptr),
@@ -148,6 +153,7 @@ CANPubSubBroker::CANPubSubBroker(CANControllerClass& can)
   memset(_connectedClients, 0, sizeof(_connectedClients));
   memset(_clientMappings, 0, sizeof(_clientMappings));
   memset(_storedSubscriptions, 0, sizeof(_storedSubscriptions));
+  memset(_pingStates, 0, sizeof(_pingStates));
 }
 
 bool CANPubSubBroker::begin() {
@@ -157,6 +163,7 @@ bool CANPubSubBroker::begin() {
   _clientCount = 0;
   _mappingCount = 0;
   _storedSubCount = 0;
+  _pingStateCount = 0;
   
   // Initialize storage and load saved mappings
   initStorage();
@@ -175,6 +182,13 @@ void CANPubSubBroker::loop() {
   int packetSize = _can->parsePacket();
   if (packetSize > 0) {
     handleMessage(packetSize);
+  }
+  
+  // Auto-ping clients if enabled
+  if (_autoPingEnabled && (millis() - _lastPingTime >= _pingInterval)) {
+    pingAllClients();
+    checkClientTimeouts();
+    _lastPingTime = millis();
   }
 }
 
@@ -205,6 +219,9 @@ void CANPubSubBroker::handleMessage(int packetSize) {
       break;
     case CAN_PS_PING:
       handlePing();
+      break;
+    case CAN_PS_PONG:
+      handlePong();
       break;
     case CAN_PS_ID_REQUEST:
       // Check if this is a request with serial number (has data)
@@ -327,6 +344,80 @@ void CANPubSubBroker::handlePing() {
   _can->write(CAN_PS_BROKER_ID);
   _can->write(clientId);
   _can->endPacket();
+}
+
+void CANPubSubBroker::handlePong() {
+  if (_can->available() < 2) return;
+  
+  uint8_t senderId = _can->read();  // Should be client ID
+  uint8_t targetId = _can->read();  // Should be broker ID (0x00)
+  
+  if (targetId != CAN_PS_BROKER_ID) return;
+  
+  // Update client's last pong time and reset missed pings
+  int index = findPingState(senderId);
+  if (index >= 0) {
+    _pingStates[index].lastPongTime = millis();
+    _pingStates[index].missedPings = 0;
+  }
+}
+
+void CANPubSubBroker::pingAllClients() {
+  // Ping all active registered clients
+  for (uint8_t i = 0; i < _mappingCount; i++) {
+    if (_clientMappings[i].active) {
+      uint8_t clientId = _clientMappings[i].clientId;
+      
+      _can->beginPacket(CAN_PS_PING);
+      _can->write(CAN_PS_BROKER_ID);
+      _can->write(clientId);
+      _can->endPacket();
+      
+      // Increment missed pings counter in ping state
+      int stateIdx = findPingState(clientId);
+      if (stateIdx >= 0) {
+        _pingStates[stateIdx].missedPings++;
+      }
+      
+      delay(5); // Small delay between pings
+    }
+  }
+}
+
+void CANPubSubBroker::checkClientTimeouts() {
+  // Check for clients that haven't responded
+  for (uint8_t i = 0; i < _pingStateCount; i++) {
+    uint8_t clientId = _pingStates[i].clientId;
+    
+    if (_pingStates[i].missedPings >= _maxMissedPings) {
+      // Find the client mapping
+      int mappingIdx = findClientMappingById(clientId);
+      if (mappingIdx >= 0 && _clientMappings[mappingIdx].active) {
+        // Mark client as inactive
+        _clientMappings[mappingIdx].active = false;
+        
+        // Remove from connected clients list
+        for (uint8_t j = 0; j < _clientCount; j++) {
+          if (_connectedClients[j] == clientId) {
+            // Shift remaining clients
+            for (uint8_t k = j; k < _clientCount - 1; k++) {
+              _connectedClients[k] = _connectedClients[k + 1];
+            }
+            _clientCount--;
+            break;
+          }
+        }
+        
+        // Call disconnect callback
+        if (_onClientDisconnect) {
+          _onClientDisconnect(clientId);
+        }
+        
+        // Save updated state
+        saveMappingsToStorage();
+      }
+    }
+  }
 }
 
 void CANPubSubBroker::handlePeerMessage() {
@@ -523,6 +614,66 @@ void CANPubSubBroker::onDirectMessage(DirectMessageCallback callback) {
   _onDirectMessage = callback;
 }
 
+void CANPubSubBroker::setPingInterval(unsigned long intervalMs) {
+  _pingInterval = intervalMs;
+}
+
+unsigned long CANPubSubBroker::getPingInterval() {
+  return _pingInterval;
+}
+
+void CANPubSubBroker::enableAutoPing(bool enable) {
+  _autoPingEnabled = enable;
+  if (enable) {
+    _lastPingTime = millis();
+    
+    // Initialize ping state for all active registered clients
+    for (uint8_t i = 0; i < _mappingCount; i++) {
+      if (_clientMappings[i].active) {
+        initPingState(_clientMappings[i].clientId);
+      }
+    }
+  }
+}
+
+bool CANPubSubBroker::isAutoPingEnabled() {
+  return _autoPingEnabled;
+}
+
+void CANPubSubBroker::setMaxMissedPings(uint8_t maxMissed) {
+  _maxMissedPings = maxMissed;
+}
+
+uint8_t CANPubSubBroker::getMaxMissedPings() {
+  return _maxMissedPings;
+}
+
+int CANPubSubBroker::findPingState(uint8_t clientId) {
+  for (uint8_t i = 0; i < _pingStateCount; i++) {
+    if (_pingStates[i].clientId == clientId) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+void CANPubSubBroker::initPingState(uint8_t clientId) {
+  // Check if already exists
+  int index = findPingState(clientId);
+  
+  if (index >= 0) {
+    // Reset existing state
+    _pingStates[index].lastPongTime = millis();
+    _pingStates[index].missedPings = 0;
+  } else if (_pingStateCount < MAX_CLIENT_MAPPINGS) {
+    // Create new state
+    _pingStates[_pingStateCount].clientId = clientId;
+    _pingStates[_pingStateCount].lastPongTime = millis();
+    _pingStates[_pingStateCount].missedPings = 0;
+    _pingStateCount++;
+  }
+}
+
 void CANPubSubBroker::sendToClient(uint8_t clientId, uint16_t topicHash, const String& message) {
   // Calculate total message size: clientId + topicHash + message
   size_t totalSize = 1 + 2 + message.length();
@@ -678,6 +829,12 @@ uint8_t CANPubSubBroker::findOrCreateClientId(const String& serialNumber) {
     // Found existing mapping, mark as active and return the same ID
     _clientMappings[index].active = true;
     saveMappingsToStorage(); // Save state change
+    
+    // Initialize ping tracking if auto-ping is enabled
+    if (_autoPingEnabled) {
+      initPingState(_clientMappings[index].clientId);
+    }
+    
     return _clientMappings[index].clientId;
   }
   
@@ -694,6 +851,11 @@ uint8_t CANPubSubBroker::findOrCreateClientId(const String& serialNumber) {
     _nextClientID++;
     if (_nextClientID == 0xFF) {
       _nextClientID = 0x01; // Wrap around, skip special IDs
+    }
+    
+    // Initialize ping tracking if auto-ping is enabled
+    if (_autoPingEnabled) {
+      initPingState(assignedId);
     }
     
     saveMappingsToStorage(); // Save new mapping
@@ -1011,7 +1173,8 @@ CANPubSubClient::CANPubSubClient(CANControllerClass& can)
     _onMessage(nullptr),
     _onDirectMessage(nullptr),
     _onConnect(nullptr),
-    _onDisconnect(nullptr) {
+    _onDisconnect(nullptr),
+    _onPong(nullptr) {
   memset(_subscribedTopics, 0, sizeof(_subscribedTopics));
 }
 
@@ -1120,6 +1283,20 @@ void CANPubSubClient::handleMessage(int packetSize) {
       break;
     case CAN_PS_PEER_MSG:
       // Peer messages are handled by onExtendedMessageComplete() only
+      break;
+    case CAN_PS_PING:
+      // Broker is pinging us, respond with pong
+      if (_can->available() >= 2) {
+        uint8_t senderId = _can->read();  // Broker ID
+        uint8_t targetId = _can->read();  // Our ID
+        if (targetId == _clientId) {
+          // Send pong response
+          _can->beginPacket(CAN_PS_PONG);
+          _can->write(_clientId);
+          _can->write(senderId);
+          _can->endPacket();
+        }
+      }
       break;
     case CAN_PS_PONG:
       handlePong();
@@ -1249,6 +1426,11 @@ void CANPubSubClient::handlePong() {
   
   if (targetId == _clientId) {
     _lastPong = millis();
+    
+    // Call callback if registered
+    if (_onPong) {
+      _onPong();
+    }
   }
 }
 
@@ -1442,6 +1624,10 @@ void CANPubSubClient::onConnect(void (*callback)()) {
 
 void CANPubSubClient::onDisconnect(void (*callback)()) {
   _onDisconnect = callback;
+}
+
+void CANPubSubClient::onPong(void (*callback)()) {
+  _onPong = callback;
 }
 
 bool CANPubSubClient::isSubscribed(const String& topic) {

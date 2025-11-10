@@ -94,6 +94,13 @@ struct ClientMapping {
   }
 };
 
+// Runtime ping state (NOT stored in flash - resets on power cycle)
+struct ClientPingState {
+  uint8_t clientId;
+  unsigned long lastPongTime;
+  uint8_t missedPings;
+};
+
 // Client subscription storage structure
 // Stores which topics each client is subscribed to (persists across power cycles)
 #define MAX_STORED_SUBS_PER_CLIENT 10
@@ -155,6 +162,14 @@ public:
   void onPublish(MessageCallback callback);
   void onDirectMessage(DirectMessageCallback callback);
   
+  // Connection monitoring
+  void setPingInterval(unsigned long intervalMs);
+  unsigned long getPingInterval();
+  void enableAutoPing(bool enable);
+  bool isAutoPingEnabled();
+  void setMaxMissedPings(uint8_t maxMissed);
+  uint8_t getMaxMissedPings();
+  
   // Broker operations
   void sendToClient(uint8_t clientId, uint16_t topicHash, const String& message);
   void sendDirectMessage(uint8_t clientId, const String& message);
@@ -212,6 +227,13 @@ private:
   void handleDirectMessage();
   void handlePeerMessage();
   void handlePing();
+  void handlePong();
+  
+  // Connection monitoring
+  void pingAllClients();
+  void checkClientTimeouts();
+  int findPingState(uint8_t clientId);
+  void initPingState(uint8_t clientId);
   
   // Data members
   Subscription _subscriptions[MAX_SUBSCRIPTIONS];
@@ -221,6 +243,12 @@ private:
   uint8_t _connectedClients[256]; // Track connected clients
   uint8_t _clientCount;
   
+  // Ping monitoring
+  unsigned long _pingInterval;
+  bool _autoPingEnabled;
+  uint8_t _maxMissedPings;
+  unsigned long _lastPingTime;
+  
   // Client ID to Serial Number mapping
   ClientMapping _clientMappings[MAX_CLIENT_MAPPINGS];
   uint8_t _mappingCount;
@@ -228,6 +256,10 @@ private:
   // Client subscription persistence
   ClientSubscriptions _storedSubscriptions[MAX_CLIENT_MAPPINGS];
   uint8_t _storedSubCount;
+  
+  // Runtime ping state (separate from persistent storage)
+  ClientPingState _pingStates[MAX_CLIENT_MAPPINGS];
+  uint8_t _pingStateCount;
   
   // Subscription storage helpers
   void storeClientSubscriptions(uint8_t clientId);
@@ -289,6 +321,9 @@ public:
   uint8_t getSubscriptionCount();
   void listSubscribedTopics(std::function<void(uint16_t hash, const String& name)> callback);
   
+  // Ping response callback
+  void onPong(void (*callback)());
+  
   // Extended message handling override
   void onExtendedMessageComplete(uint8_t msgType, uint8_t senderId, const uint8_t* data, size_t length) override;
   
@@ -318,6 +353,7 @@ private:
   DirectMessageCallback _onDirectMessage;
   void (*_onConnect)();
   void (*_onDisconnect)();
+  void (*_onPong)();
 };
 
 #endif // CAN_PS_H

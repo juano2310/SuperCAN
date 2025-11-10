@@ -165,6 +165,7 @@ void setupClient() {
   pubsub.onConnect(onClientConnect);
   pubsub.onMessage(onClientMessage);
   pubsub.onDirectMessage(onClientDirectMessage);
+  pubsub.onPong(onClientPong);
   
   Serial.println("Connecting to broker...");
   delay(random(100, 500)); // Random delay to avoid collision
@@ -260,6 +261,12 @@ void onClientDirectMessage(uint8_t senderId, const String& message) {
   Serial.print(senderId, DEC);
   Serial.print(": ");
   Serial.println(message);
+}
+
+void onClientPong() {
+  Serial.print(">>> Pong from broker [");
+  Serial.print(millis() / 1000);
+  Serial.println("s]");
 }
 
 #endif
