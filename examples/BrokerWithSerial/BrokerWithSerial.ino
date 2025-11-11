@@ -24,19 +24,20 @@
   - Or ESP32 with built-in CAN controller
   
   Commands (via Serial):
-  - list          - List all registered clients
   - clients       - Show registered clients with online/offline status
-  - pub:topic:msg - Publish message to a topic
-  - msg:id:msg    - Send direct message to client
+  - topics        - List all subscribed topics
   - stats         - Show broker statistics
+  - pub:topic:msg - Publish message to a topic
+  - msg:id:msg    - Send direct message to client (ID in decimal)
   - unreg:id      - Unregister client by ID (decimal)
   - unreg:SN      - Unregister client by serial number
   - find:SN       - Find client ID by serial number
-  - clear         - Clear all stored mappings
+  - clear         - Clear all stored mappings (requires confirmation)
+  - clearall      - Clear everything (mappings, subscriptions, topics, ping config)
   - ping:on       - Enable auto-ping
   - ping:off      - Disable auto-ping
-  - interval:ms   - Set ping interval (ms)
-  - maxmissed:n   - Set max missed pings
+  - interval:ms   - Set ping interval (minimum 1000ms)
+  - maxmissed:n   - Set max missed pings (1-10)
   
   Created 2025
   by Juan Pablo Risso

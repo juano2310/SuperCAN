@@ -17,13 +17,13 @@
   - Or ESP32 with built-in CAN controller
   
   Commands (via Serial):
+  - topics         - List subscribed topics
   - sub:topic      - Subscribe to a topic
   - unsub:topic    - Unsubscribe from topic
   - pub:topic:msg  - Publish message to topic
   - msg:message    - Send direct message to broker
   - ping           - Ping the broker
   - status         - Show connection status
-  - list           - List subscribed topics
   
   Created 2025
   by Juan Pablo Risso
@@ -76,7 +76,7 @@ void setup() {
   Serial.println("  msg:message    - Send direct message to broker");
   Serial.println("  ping           - Ping broker");
   Serial.println("  status         - Show connection status");
-  Serial.println("  list           - List subscriptions");
+  Serial.println("  topics         - List subscriptions");
   Serial.println();
 }
 
@@ -157,7 +157,7 @@ void loop() {
     } else if (input == "status") {
       showStatus();
       
-    } else if (input == "list") {
+    } else if (input == "topics") {
       listSubscriptions();
       
     } else if (input.length() > 0) {

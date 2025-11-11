@@ -1,8 +1,8 @@
-# Super CAN - Library
+# Super CAN Bus - Library
 
 **A modern, robust communication protocol for the age of AI**
 
-An enhanced Arduino library for CAN bus communication with built-in publish/subscribe protocol.
+An enhanced Arduino library for CAN Bus communication with built-in publish/subscribe protocol.
 
 **Based on the excellent [arduino-CAN](https://github.com/sandeepmistry/arduino-CAN) library by Sandeep Mistry**
 
