@@ -653,22 +653,46 @@ client.onDirectMessage([](uint8_t senderId, const String& msg) {
 
 ---
 
-#### onConnect()
+#### onPong()
 
 ```cpp
-void onConnect(void (*callback)())
+void onPong(void (*callback)())
 ```
 
-Register a callback for connection events.
+Register a callback for ping response events.
 
 **Parameters:**
 - `callback` - Function with signature `void callback()`
 
 **Example:**
 ```cpp
-client.onConnect([]() {
-  Serial.println("Connected!");
+client.onPong([]() {
+  Serial.print("Pong received! RTT: ");
+  Serial.print(client.getLastPingTime());
+  Serial.println("ms");
 });
+```
+
+---
+
+#### getLastPingTime()
+
+```cpp
+unsigned long getLastPingTime()
+```
+
+Get the round-trip time (RTT) of the last ping/pong exchange in milliseconds.
+
+**Returns:** RTT in milliseconds, or 0 if no valid pong has been received yet
+
+**Example:**
+```cpp
+unsigned long rtt = client.getLastPingTime();
+if (rtt > 0) {
+  Serial.print("Broker latency: ");
+  Serial.print(rtt);
+  Serial.println("ms");
+}
 ```
 
 ---

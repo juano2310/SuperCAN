@@ -20,14 +20,14 @@ uint16_t CANPubSubBase::hashTopic(const String& topic) {
 void CANPubSubBase::registerTopic(const String& topic) {
   uint16_t hash = hashTopic(topic);
   
-  // Check if already registered
+  // Check if already registered in runtime mapping
   for (uint8_t i = 0; i < _topicMappingCount; i++) {
     if (_topicMappings[i].hash == hash) {
       return; // Already registered
     }
   }
   
-  // Add new mapping
+  // Add new mapping to runtime table
   if (_topicMappingCount < MAX_SUBSCRIPTIONS) {
     _topicMappings[_topicMappingCount].hash = hash;
     _topicMappings[_topicMappingCount].name = topic;
@@ -140,6 +140,7 @@ CANPubSubBroker::CANPubSubBroker(CANControllerClass& can)
     _clientCount(0),
     _mappingCount(0),
     _storedSubCount(0),
+    _storedTopicCount(0),
     _pingStateCount(0),
     _pingInterval(5000),
     _autoPingEnabled(false),
@@ -153,6 +154,7 @@ CANPubSubBroker::CANPubSubBroker(CANControllerClass& can)
   memset(_connectedClients, 0, sizeof(_connectedClients));
   memset(_clientMappings, 0, sizeof(_clientMappings));
   memset(_storedSubscriptions, 0, sizeof(_storedSubscriptions));
+  memset(_storedTopicNames, 0, sizeof(_storedTopicNames));
   memset(_pingStates, 0, sizeof(_pingStates));
 }
 
@@ -163,13 +165,18 @@ bool CANPubSubBroker::begin() {
   _clientCount = 0;  // All clients start as offline after power cycle
   _mappingCount = 0;
   _storedSubCount = 0;
+  _storedTopicCount = 0;
   _pingStateCount = 0;  // Clear ping states - will be reinitialized when clients connect
   
   // Initialize storage and load saved mappings
   initStorage();
   loadMappingsFromStorage();
   loadSubscriptionsFromStorage();
+  loadTopicNamesFromStorage();  // Load topic names from flash
   loadPingConfigFromStorage();
+  
+  // Restore all stored subscriptions to active table
+  restoreAllSubscriptionsToActiveTable();
   
   // If auto-ping was enabled, initialize ping states for registered clients
   // Note: This only sets up ping tracking, clients are NOT marked as online
@@ -275,24 +282,11 @@ void CANPubSubBroker::handleSubscribe() {
   // Register topic name if provided
   if (topicName.length() > 0) {
     registerTopic(topicName);
+    // Also persist topic name to flash storage
+    storeTopicName(topicHash, topicName);
   }
   
   addSubscription(clientId, topicHash);
-  
-  // Restore stored subscriptions for this client (if any) - only on first connection
-  static uint8_t restoredClients[MAX_CLIENT_MAPPINGS];
-  static uint8_t restoredCount = 0;
-  bool alreadyRestored = false;
-  for (uint8_t i = 0; i < restoredCount; i++) {
-    if (restoredClients[i] == clientId) {
-      alreadyRestored = true;
-      break;
-    }
-  }
-  if (!alreadyRestored && restoredCount < MAX_CLIENT_MAPPINGS) {
-    restoreClientSubscriptions(clientId);
-    restoredClients[restoredCount++] = clientId;
-  }
 }
 
 void CANPubSubBroker::handleUnsubscribe() {
@@ -811,11 +805,35 @@ void CANPubSubBroker::getSubscribers(uint16_t topicHash, uint8_t* subscribers, u
 void CANPubSubBroker::listSubscribedTopics(std::function<void(uint16_t hash, const String& name, uint8_t subscriberCount)> callback) {
   if (!callback) return;
   
+  // Show active subscriptions (includes restored subscriptions from storage)
   for (uint8_t i = 0; i < _subTableSize; i++) {
     uint16_t hash = _subscriptions[i].topicHash;
     String name = getTopicName(hash);
     uint8_t count = _subscriptions[i].subCount;
     callback(hash, name, count);
+  }
+  
+  // Also show stored topics that don't have active subscribers (after power cycle)
+  // This helps show what topics are in storage even if clients haven't reconnected
+  for (uint8_t i = 0; i < _storedTopicCount; i++) {
+    if (!_storedTopicNames[i].active) continue;
+    
+    uint16_t hash = _storedTopicNames[i].hash;
+    
+    // Check if this topic is already in the active subscriptions
+    bool alreadyListed = false;
+    for (uint8_t j = 0; j < _subTableSize; j++) {
+      if (_subscriptions[j].topicHash == hash) {
+        alreadyListed = true;
+        break;
+      }
+    }
+    
+    // If not already listed, show it with 0 subscribers
+    if (!alreadyListed) {
+      String name = _storedTopicNames[i].getName();
+      callback(hash, name, 0);
+    }
   }
 }
 
@@ -1277,6 +1295,10 @@ void CANPubSubClient::end() {
 }
 
 bool CANPubSubClient::connect(unsigned long timeout) {
+  // Clear subscriptions on (re)connect - they will be restored by broker if persistent
+  _subscribedTopicCount = 0;
+  memset(_subscribedTopics, 0, sizeof(_subscribedTopics));
+  
   requestClientID();
   
   unsigned long startTime = millis();
@@ -1300,6 +1322,10 @@ bool CANPubSubClient::connect(unsigned long timeout) {
 }
 
 bool CANPubSubClient::connect(const String& serialNumber, unsigned long timeout) {
+  // Clear subscriptions on (re)connect - they will be restored by broker if persistent
+  _subscribedTopicCount = 0;
+  memset(_subscribedTopics, 0, sizeof(_subscribedTopics));
+  
   _serialNumber = serialNumber;
   requestClientIDWithSerial(serialNumber);
   
@@ -1357,6 +1383,9 @@ void CANPubSubClient::handleMessage(int packetSize) {
       break;
     case CAN_PS_SUBSCRIBE:
       handleSubscribeNotification();
+      break;
+    case CAN_PS_SUB_RESTORE:
+      handleSubscriptionRestore();
       break;
     case CAN_PS_TOPIC_DATA:
       handleTopicData();
@@ -1544,6 +1573,40 @@ void CANPubSubClient::handlePong() {
     if (_onPong) {
       _onPong();
     }
+  }
+}
+
+void CANPubSubClient::handleSubscriptionRestore() {
+  // Broker is sending us a stored subscription with topic name
+  // Format: [clientId][topicHash][topicNameLength][topicName]
+  if (_can->available() < 4) return;
+  
+  uint8_t clientId = _can->read();
+  if (clientId != _clientId) return; // Not for us
+  
+  uint16_t topicHash = (_can->read() << 8) | _can->read();
+  uint8_t topicNameLen = _can->read();
+  
+  // Read topic name
+  String topicName = "";
+  for (uint8_t i = 0; i < topicNameLen && _can->available(); i++) {
+    topicName += (char)_can->read();
+  }
+  
+  // Register topic name in our local mapping
+  registerTopic(topicName);
+  
+  // Add to our subscribed topics list if not already present
+  bool alreadySubscribed = false;
+  for (uint8_t i = 0; i < _subscribedTopicCount; i++) {
+    if (_subscribedTopics[i] == topicHash) {
+      alreadySubscribed = true;
+      break;
+    }
+  }
+  
+  if (!alreadySubscribed && _subscribedTopicCount < MAX_CLIENT_TOPICS) {
+    _subscribedTopics[_subscribedTopicCount++] = topicHash;
   }
 }
 
@@ -1846,6 +1909,46 @@ void CANPubSubClient::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       break;
     }
     
+    case CAN_PS_SUB_RESTORE: {
+      // Extended subscription restore from broker (with topic name)
+      // Format (in buffer): [topicHash_h][topicHash_l][topicNameLen][topicName...]
+      // Note: clientId was already extracted by processExtendedFrame from first byte
+      if (length < 3) return;
+      
+      // The senderId parameter actually contains our clientId
+      if (senderId != _clientId) return; // Not for us
+      
+      uint16_t topicHash = (data[0] << 8) | data[1];
+      uint8_t topicLen = data[2];
+      
+      String topic = "";
+      for (uint8_t i = 0; i < topicLen && (3 + i) < length; i++) {
+        topic += (char)data[3 + i];
+      }
+      
+      // Register the topic mapping locally
+      if (topic.length() > 0) {
+        registerTopic(topic);
+      }
+      
+      // Add to local subscription list
+      if (_subscribedTopicCount < MAX_CLIENT_TOPICS) {
+        // Check if already subscribed
+        bool alreadySubscribed = false;
+        for (uint8_t i = 0; i < _subscribedTopicCount; i++) {
+          if (_subscribedTopics[i] == topicHash) {
+            alreadySubscribed = true;
+            break;
+          }
+        }
+        
+        if (!alreadySubscribed) {
+          _subscribedTopics[_subscribedTopicCount++] = topicHash;
+        }
+      }
+      break;
+    }
+    
     case CAN_PS_TOPIC_DATA: {
       // Extended topic data
       // Format (in buffer): [topicHash_h][topicHash_l][message...]
@@ -2098,14 +2201,44 @@ void CANPubSubBroker::restoreClientSubscriptions(uint8_t clientId) {
   for (uint8_t i = 0; i < _storedSubscriptions[index].topicCount; i++) {
     uint16_t topicHash = _storedSubscriptions[index].topics[i];
     
-    // Add to broker's internal subscription table
-    addSubscription(clientId, topicHash);
+    // Find if topic already exists in active subscriptions table
+    int topicIndex = -1;
+    for (uint8_t j = 0; j < _subTableSize; j++) {
+      if (_subscriptions[j].topicHash == topicHash) {
+        topicIndex = j;
+        break;
+      }
+    }
     
-    // Send topic name back to client so it can restore its local mapping
-    // Format: [clientId][topicHash][topicName]
-    String topicName = getTopicName(topicHash);
+    if (topicIndex >= 0) {
+      // Topic exists - check if client is already subscribed
+      bool alreadySubscribed = false;
+      for (uint8_t k = 0; k < _subscriptions[topicIndex].subCount; k++) {
+        if (_subscriptions[topicIndex].subscribers[k] == clientId) {
+          alreadySubscribed = true;
+          break;
+        }
+      }
+      
+      // Add client to this topic's subscribers if not already there
+      if (!alreadySubscribed && _subscriptions[topicIndex].subCount < MAX_SUBSCRIBERS_PER_TOPIC) {
+        _subscriptions[topicIndex].subscribers[_subscriptions[topicIndex].subCount++] = clientId;
+      }
+    } else {
+      // Topic doesn't exist - create new topic entry
+      if (_subTableSize < MAX_SUBSCRIPTIONS) {
+        _subscriptions[_subTableSize].topicHash = topicHash;
+        _subscriptions[_subTableSize].subscribers[0] = clientId;
+        _subscriptions[_subTableSize].subCount = 1;
+        _subTableSize++;
+      }
+    }
     
-    // Calculate message size
+    // Get topic name from persistent storage (not just runtime mapping)
+    String topicName = getStoredTopicName(topicHash);
+    
+    // Send topic name back to client using SUB_RESTORE message type
+    // Format: [clientId][topicHash][topicNameLength][topicName]
     size_t totalSize = 1 + 2 + 1 + topicName.length();
     
     if (totalSize > CAN_FRAME_DATA_SIZE) {
@@ -2117,9 +2250,9 @@ void CANPubSubBroker::restoreClientSubscriptions(uint8_t clientId) {
       buffer[3] = (uint8_t)topicName.length();
       memcpy(buffer + 4, topicName.c_str(), min(topicName.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 4)));
       
-      sendExtendedMessage(CAN_PS_SUBSCRIBE, buffer, min(4 + topicName.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
+      sendExtendedMessage(CAN_PS_SUB_RESTORE, buffer, min(4 + topicName.length(), (size_t)MAX_EXTENDED_MSG_SIZE));
     } else {
-      _can->beginPacket(CAN_PS_SUBSCRIBE);
+      _can->beginPacket(CAN_PS_SUB_RESTORE);
       _can->write(clientId);
       _can->write(topicHash >> 8);
       _can->write(topicHash & 0xFF);
@@ -2199,6 +2332,53 @@ bool CANPubSubBroker::loadSubscriptionsFromStorage() {
     
     return true;
   #endif
+}
+
+void CANPubSubBroker::restoreAllSubscriptionsToActiveTable() {
+  // Restore all stored subscriptions to the active _subscriptions table
+  // This runs at boot to make subscriptions immediately available
+  
+  for (uint8_t i = 0; i < _storedSubCount; i++) {
+    ClientSubscriptions& clientSubs = _storedSubscriptions[i];
+    
+    // Process each topic this client is subscribed to
+    for (uint8_t j = 0; j < clientSubs.topicCount && j < MAX_STORED_SUBS_PER_CLIENT; j++) {
+      uint16_t topicHash = clientSubs.topics[j];
+      uint8_t clientId = clientSubs.clientId;
+      
+      // Find if this topic already exists in active table
+      int topicIndex = -1;
+      for (uint8_t k = 0; k < _subTableSize; k++) {
+        if (_subscriptions[k].topicHash == topicHash) {
+          topicIndex = k;
+          break;
+        }
+      }
+      
+      if (topicIndex >= 0) {
+        // Topic exists, add client to subscribers if not already there
+        bool alreadySubscribed = false;
+        for (uint8_t s = 0; s < _subscriptions[topicIndex].subCount; s++) {
+          if (_subscriptions[topicIndex].subscribers[s] == clientId) {
+            alreadySubscribed = true;
+            break;
+          }
+        }
+        
+        if (!alreadySubscribed && _subscriptions[topicIndex].subCount < MAX_SUBSCRIBERS_PER_TOPIC) {
+          _subscriptions[topicIndex].subscribers[_subscriptions[topicIndex].subCount++] = clientId;
+        }
+      } else {
+        // Topic doesn't exist, create new entry
+        if (_subTableSize < MAX_SUBSCRIPTIONS) {
+          _subscriptions[_subTableSize].topicHash = topicHash;
+          _subscriptions[_subTableSize].subCount = 1;
+          _subscriptions[_subTableSize].subscribers[0] = clientId;
+          _subTableSize++;
+        }
+      }
+    }
+  }
 }
 
 bool CANPubSubBroker::saveSubscriptionsToStorage() {
@@ -2355,3 +2535,192 @@ bool CANPubSubBroker::clearStoredPingConfig() {
   
   return savePingConfigToStorage();
 }
+
+// ===== Topic Name Persistence Implementation =====
+
+void CANPubSubBroker::storeTopicName(uint16_t hash, const String& name) {
+  // Check if topic name already stored
+  int index = findStoredTopicName(hash);
+  
+  if (index >= 0) {
+    // Update existing entry
+    _storedTopicNames[index].setName(name);
+    _storedTopicNames[index].active = true;
+  } else {
+    // Find empty slot or add new entry
+    for (uint8_t i = 0; i < MAX_STORED_TOPIC_NAMES; i++) {
+      if (!_storedTopicNames[i].active) {
+        _storedTopicNames[i].hash = hash;
+        _storedTopicNames[i].setName(name);
+        _storedTopicNames[i].active = true;
+        if (i >= _storedTopicCount) {
+          _storedTopicCount = i + 1;
+        }
+        saveTopicNamesToStorage();
+        return;
+      }
+    }
+  }
+  
+  saveTopicNamesToStorage();
+}
+
+String CANPubSubBroker::getStoredTopicName(uint16_t hash) {
+  int index = findStoredTopicName(hash);
+  if (index >= 0) {
+    return _storedTopicNames[index].getName();
+  }
+  return String("0x") + String(hash, HEX);
+}
+
+int CANPubSubBroker::findStoredTopicName(uint16_t hash) {
+  for (uint8_t i = 0; i < _storedTopicCount; i++) {
+    if (_storedTopicNames[i].active && _storedTopicNames[i].hash == hash) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+bool CANPubSubBroker::loadTopicNamesFromStorage() {
+  #ifdef ESP32
+    // ESP32 implementation using Preferences
+    uint16_t magic = _preferences.getUShort("topicMagic", 0);
+    if (magic != STORAGE_TOPIC_MAGIC) {
+      // No valid topic name data stored
+      return false;
+    }
+    
+    _storedTopicCount = _preferences.getUChar("topicCount", 0);
+    
+    if (_storedTopicCount > MAX_STORED_TOPIC_NAMES) {
+      _storedTopicCount = 0;
+      return false;
+    }
+    
+    // Load each stored topic name
+    for (uint8_t i = 0; i < _storedTopicCount; i++) {
+      String key = "topic" + String(i);
+      size_t len = _preferences.getBytesLength(key.c_str());
+      if (len == sizeof(StoredTopicName)) {
+        _preferences.getBytes(key.c_str(), &_storedTopicNames[i], sizeof(StoredTopicName));
+        
+        // Re-register topic in runtime mapping
+        if (_storedTopicNames[i].active) {
+          registerTopic(_storedTopicNames[i].getName());
+        }
+      }
+    }
+    
+    return true;
+    
+  #else
+    // Arduino EEPROM implementation
+    // Calculate offset (after client mappings, subscriptions, and ping config)
+    int addr = sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t) + 
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientMapping)) +
+               sizeof(uint16_t) + sizeof(uint8_t) +
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientSubscriptions)) +
+               sizeof(bool) + sizeof(unsigned long) + sizeof(uint8_t);
+    
+    uint16_t magic;
+    EEPROM.get(addr, magic);
+    
+    if (magic != STORAGE_TOPIC_MAGIC) {
+      // No valid topic name data stored
+      return false;
+    }
+    
+    addr += sizeof(uint16_t);
+    EEPROM.get(addr, _storedTopicCount);
+    addr += sizeof(uint8_t);
+    
+    if (_storedTopicCount > MAX_STORED_TOPIC_NAMES) {
+      _storedTopicCount = 0;
+      return false;
+    }
+    
+    // Load each stored topic name
+    for (uint8_t i = 0; i < _storedTopicCount; i++) {
+      EEPROM.get(addr, _storedTopicNames[i]);
+      addr += sizeof(StoredTopicName);
+      
+      // Re-register topic in runtime mapping
+      if (_storedTopicNames[i].active) {
+        registerTopic(_storedTopicNames[i].getName());
+      }
+    }
+    
+    return true;
+  #endif
+}
+
+bool CANPubSubBroker::saveTopicNamesToStorage() {
+  #ifdef ESP32
+    // ESP32 implementation using Preferences
+    _preferences.putUShort("topicMagic", STORAGE_TOPIC_MAGIC);
+    _preferences.putUChar("topicCount", _storedTopicCount);
+    
+    // Save each topic name
+    for (uint8_t i = 0; i < _storedTopicCount; i++) {
+      String key = "topic" + String(i);
+      _preferences.putBytes(key.c_str(), &_storedTopicNames[i], sizeof(StoredTopicName));
+    }
+    
+    return true;
+    
+  #else
+    // Arduino EEPROM implementation
+    // Calculate offset (after client mappings, subscriptions, and ping config)
+    int addr = sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t) + 
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientMapping)) +
+               sizeof(uint16_t) + sizeof(uint8_t) +
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientSubscriptions)) +
+               sizeof(bool) + sizeof(unsigned long) + sizeof(uint8_t);
+    
+    // Write magic number
+    EEPROM.put(addr, STORAGE_TOPIC_MAGIC);
+    addr += sizeof(uint16_t);
+    
+    // Write count
+    EEPROM.put(addr, _storedTopicCount);
+    addr += sizeof(uint8_t);
+    
+    // Write each topic name
+    for (uint8_t i = 0; i < _storedTopicCount; i++) {
+      EEPROM.put(addr, _storedTopicNames[i]);
+      addr += sizeof(StoredTopicName);
+    }
+    
+    #if defined(ESP8266)
+      EEPROM.commit();
+    #endif
+    
+    return true;
+  #endif
+}
+
+bool CANPubSubBroker::clearStoredTopicNames() {
+  _storedTopicCount = 0;
+  memset(_storedTopicNames, 0, sizeof(_storedTopicNames));
+  
+  #ifdef ESP32
+    _preferences.putUShort("topicMagic", 0);
+    _preferences.putUChar("topicCount", 0);
+    return true;
+  #else
+    // Clear topic names section by writing 0 to magic number
+    int addr = sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t) + 
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientMapping)) +
+               sizeof(uint16_t) + sizeof(uint8_t) +
+               (MAX_CLIENT_MAPPINGS * sizeof(ClientSubscriptions)) +
+               sizeof(bool) + sizeof(unsigned long) + sizeof(uint8_t);
+    uint16_t zero = 0;
+    EEPROM.put(addr, zero);
+    #if defined(ESP8266)
+      EEPROM.commit();
+    #endif
+    return true;
+  #endif
+}
+

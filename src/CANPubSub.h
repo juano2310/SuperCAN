@@ -22,6 +22,7 @@
 #define CAN_PS_TOPIC_DATA     0x04
 #define CAN_PS_DIRECT_MSG     0x05
 #define CAN_PS_PEER_MSG       0x09  // Peer-to-peer message (client to client)
+#define CAN_PS_SUB_RESTORE    0x0A  // Broker restores subscription with topic name to client
 #define CAN_PS_ID_REQUEST     0xFF
 #define CAN_PS_ID_RESPONSE    0xFE
 #define CAN_PS_PING           0x06
@@ -110,11 +111,31 @@ struct ClientSubscriptions {
   uint8_t topicCount;
 };
 
+// Topic name storage structure for persistence
+// Stores topic hash -> name mappings in flash memory
+#define MAX_TOPIC_NAME_LENGTH 32
+#define MAX_STORED_TOPIC_NAMES 20
+struct StoredTopicName {
+  uint16_t hash;
+  char name[MAX_TOPIC_NAME_LENGTH];
+  bool active;
+  
+  void setName(const String& topicName) {
+    strncpy(name, topicName.c_str(), MAX_TOPIC_NAME_LENGTH - 1);
+    name[MAX_TOPIC_NAME_LENGTH - 1] = '\0';
+  }
+  
+  String getName() const {
+    return String(name);
+  }
+};
+
 // Storage configuration
 #define STORAGE_NAMESPACE "CANPubSub"
-#define STORAGE_MAGIC 0xCABE     // Magic number to verify valid data
-#define STORAGE_SUB_MAGIC 0xCAFF // Magic number for subscription data
-#define EEPROM_SIZE 4096         // EEPROM size for non-ESP32 platforms (client mappings + subscriptions + ping config)
+#define STORAGE_MAGIC 0xCABE        // Magic number to verify valid data
+#define STORAGE_SUB_MAGIC 0xCAFF    // Magic number for subscription data
+#define STORAGE_TOPIC_MAGIC 0xFEED  // Magic number for topic name data
+#define EEPROM_SIZE 8192            // EEPROM size for non-ESP32 platforms (increased for topic names)
 
 // Base pub/sub class
 class CANPubSubBase {
@@ -205,11 +226,17 @@ public:
   bool loadSubscriptionsFromStorage();
   bool saveSubscriptionsToStorage();
   bool clearStoredSubscriptions();
+  void restoreAllSubscriptionsToActiveTable();
   
   // Ping configuration persistence
   bool loadPingConfigFromStorage();
   bool savePingConfigToStorage();
   bool clearStoredPingConfig();
+  
+  // Topic name persistence
+  bool loadTopicNamesFromStorage();
+  bool saveTopicNamesToStorage();
+  bool clearStoredTopicNames();
   
 private:
   // Subscription management
@@ -269,10 +296,19 @@ private:
   ClientPingState _pingStates[MAX_CLIENT_MAPPINGS];
   uint8_t _pingStateCount;
   
+  // Topic name persistence
+  StoredTopicName _storedTopicNames[MAX_STORED_TOPIC_NAMES];
+  uint8_t _storedTopicCount;
+  
   // Subscription storage helpers
   void storeClientSubscriptions(uint8_t clientId);
   void restoreClientSubscriptions(uint8_t clientId);
   int findStoredSubscription(uint8_t clientId);
+  
+  // Topic name storage helpers
+  void storeTopicName(uint16_t hash, const String& name);
+  String getStoredTopicName(uint16_t hash);
+  int findStoredTopicName(uint16_t hash);
   
   // Storage helpers
   #ifdef ESP32
@@ -349,6 +385,7 @@ private:
   void handleTopicData();
   void handleDirectMessageReceived();
   void handlePong();
+  void handleSubscriptionRestore();
   
   // Data members
   uint8_t _clientId;

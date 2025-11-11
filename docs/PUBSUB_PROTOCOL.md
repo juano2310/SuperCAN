@@ -25,6 +25,8 @@ The protocol defines the following message types (sent as CAN packet IDs):
 | PING | 0x06 | Client pings broker |
 | PONG | 0x07 | Broker responds to ping |
 | ACK | 0x08 | Acknowledgment message |
+| PEER_MSG | 0x09 | Peer-to-peer message (client to client) |
+| SUB_RESTORE | 0x0A | Broker restores subscription with topic name |
 | ID_REQUEST | 0xFF | Client requests ID assignment |
 | ID_RESPONSE | 0xFE | Broker assigns client ID |
 
@@ -84,6 +86,24 @@ Client                  Broker
   | [client_id]           |
   | [topic_hash_h]        |
   | [topic_hash_l]        |
+  | [topic_name_len]      |
+  | [topic_name]          |  💾 Topic name stored in flash
+  |                       |
+```
+
+### 2b. Subscription Restoration (Reconnect)
+
+When a client with a persistent ID reconnects, the broker automatically restores their subscriptions **with topic names**:
+
+```
+Client (Reconnect)     Broker
+  |                       |
+  |<--SUB_RESTORE (0x0A)--|  💾 Loaded from flash
+  |  [client_id]          |
+  |  [topic_hash_h]       |
+  |  [topic_hash_l]       |
+  |  [topic_name_len]     |
+  |  [topic_name]         |  ← Topic name included!
   |                       |
 ```
 
@@ -131,6 +151,41 @@ for (each character in topic) {
 ```
 
 This allows topic names to be efficiently transmitted over CAN bus while maintaining reasonable uniqueness.
+
+## Topic Name Persistence
+
+**NEW**: Topic names are now **automatically persisted to flash memory** alongside subscriptions!
+
+### How It Works
+
+1. **On Subscribe**: When a client subscribes, the broker:
+   - Stores the topic hash (for routing)
+   - Stores the full topic name in flash memory
+   - Associates the name with the hash
+
+2. **On Reconnect**: When a client with persistent ID reconnects:
+   - Broker sends `SUB_RESTORE` messages
+   - Each message includes both hash AND full topic name
+   - Client automatically rebuilds its topic name mapping
+
+3. **Benefits**:
+   - ✅ **No manual re-subscription needed** - Automatic restoration
+   - ✅ **Topic names preserved** - No need to track separately
+   - ✅ **Seamless recovery** - Works transparently after power loss
+   - ✅ **Up to 20 topic names stored** (configurable)
+
+### Storage Details
+
+```cpp
+// Stored in flash for each topic:
+struct StoredTopicName {
+  uint16_t hash;           // 2 bytes - Topic hash
+  char name[32];           // 32 bytes - Topic name
+  bool active;             // 1 byte - Active flag
+};
+
+// Total: 35 bytes per topic × 20 topics = 700 bytes
+```
 
 ## API Reference
 

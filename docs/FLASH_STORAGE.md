@@ -1,7 +1,7 @@
 # Flash Storage Quick Reference
 
 ## Overview
-Client ID to serial number mappings **and topic subscriptions** are **automatically stored in flash memory** and persist across power cycles.
+Client ID to serial number mappings, **topic subscriptions**, and **topic names** are **automatically stored in flash memory** and persist across power cycles.
 
 ## Platform Support
 
@@ -17,13 +17,13 @@ Client ID to serial number mappings **and topic subscriptions** are **automatica
 Storage operations happen **automatically**:
 
 ```cpp
-broker.begin();                    // ← Loads mappings, subscriptions AND ping config from flash automatically
+broker.begin();                    // ← Loads mappings, subscriptions, topic names AND ping config from flash automatically
 broker.registerClient("ESP32_001"); // ← Saves to flash automatically
 broker.unregisterClient(0x10);     // ← Saves to flash automatically
 
-// Subscriptions are also persisted automatically
-// When client subscribes, their subscription is saved
-// When client reconnects, subscriptions are restored
+// Subscriptions AND topic names are persisted automatically
+// When client subscribes, their subscription AND topic name are saved
+// When client reconnects, subscriptions are restored WITH topic names
 
 // Ping configuration is also persisted automatically
 broker.enableAutoPing(true);       // ← Saves to flash automatically
@@ -39,16 +39,19 @@ For advanced use cases:
 // Manual save (automatic saves disabled)
 broker.saveMappingsToStorage();
 broker.saveSubscriptionsToStorage();
+broker.saveTopicNamesToStorage();
 broker.savePingConfigToStorage();
 
 // Manual load (useful after external changes)
 broker.loadMappingsFromStorage();
 broker.loadSubscriptionsFromStorage();
+broker.loadTopicNamesFromStorage();
 broker.loadPingConfigFromStorage();
 
 // Clear all stored data
 broker.clearStoredMappings();
 broker.clearStoredSubscriptions();
+broker.clearStoredTopicNames();
 broker.clearStoredPingConfig();
 ```
 
@@ -59,10 +62,14 @@ Default configuration:
 - Maximum clients: 50
 - Serial length: 32 chars
 - Max subscriptions per client: 10
+- Max stored topic names: 20
+- Topic name length: 32 chars
 - Storage per client mapping: 34 bytes
 - Storage per subscription set: 23 bytes (1 + 10×2 + 1)
+- Storage per topic name: 35 bytes (2 + 32 + 1)
 - Total client mapping storage: ~1700 bytes
 - Total subscription storage: ~1150 bytes
+- Total topic name storage: ~700 bytes
 - Ping configuration storage: 6 bytes (bool + ulong + uint8_t)
 
 Total memory usage:
@@ -76,13 +83,18 @@ Subscriptions:
 - Subscription data: 23 × 50 = 1150 bytes
 - Subtotal: 1153 bytes
 
+Topic Names:
+- Header: 3 bytes (magic + count)
+- Topic data: 35 × 20 = 700 bytes
+- Subtotal: 703 bytes
+
 Ping Configuration:
 - Enabled flag: 1 byte (bool)
 - Interval: 4 bytes (unsigned long)
 - Max missed pings: 1 byte (uint8_t)
 - Subtotal: 6 bytes
 
-Total: ~2863 bytes (EEPROM size: 4096 bytes)
+Total: ~3566 bytes (EEPROM size: 8192 bytes)
 ```
 
 ## Configuration
@@ -93,7 +105,9 @@ Edit `CANPubSub.h` to customize:
 #define MAX_CLIENT_MAPPINGS 50          // More clients = more storage
 #define MAX_SERIAL_LENGTH 32            // Longer serials = more storage
 #define MAX_STORED_SUBS_PER_CLIENT 10   // More subscriptions per client = more storage
-#define EEPROM_SIZE 4096                // Total EEPROM size (Arduino, increased for subscriptions)
+#define MAX_STORED_TOPIC_NAMES 20       // More topic names = more storage
+#define MAX_TOPIC_NAME_LENGTH 32        // Longer topic names = more storage
+#define EEPROM_SIZE 8192                // Total EEPROM size (Arduino, increased for topic names)
 ```
 
 ## Power Cycle Testing
@@ -104,7 +118,7 @@ uint8_t client1 = broker.registerClient("TEST_001");
 uint8_t client2 = broker.registerClient("TEST_002");
 
 // Client subscribes to topics (manually simulated or through actual client)
-// Subscriptions are automatically saved
+// Subscriptions AND topic names are automatically saved
 
 // Step 2: Check count
 Serial.println(broker.getRegisteredClientCount()); // → 2
@@ -115,9 +129,10 @@ Serial.println(broker.getSubscriptionCount());     // → # of active topics
 // Step 4: Power on and check
 broker.begin();
 Serial.println(broker.getRegisteredClientCount()); // → 2 (persisted!)
+// Topic names are also loaded from flash
 
 // Step 5: Client reconnects with same serial number
-// Subscriptions are automatically restored!
+// Subscriptions are automatically restored WITH topic names!
 ```
 
 ## Storage Verification
@@ -186,6 +201,23 @@ Flash Memory Layout:
 │ Ping Interval (ms)             [4 bytes]    │ ← unsigned long
 ├─────────────────────────────────────────────┤
 │ Max Missed Pings               [1 byte]     │ ← uint8_t
+├─────────────────────────────────────────────┤
+│ TOPIC NAMES SECTION                         │
+├─────────────────────────────────────────────┤
+│ Topic Magic Number (0xFEED)   [2 bytes]    │ ← Validates topic name data
+├─────────────────────────────────────────────┤
+│ Topic Name Count               [1 byte]     │
+├─────────────────────────────────────────────┤
+│ Stored Topic Name #1          [35 bytes]    │
+│   - Topic Hash                 [2 bytes]    │
+│   - Topic Name                [32 bytes]    │
+│   - Active Flag                [1 byte]     │
+├─────────────────────────────────────────────┤
+│ Stored Topic Name #2          [35 bytes]    │
+├─────────────────────────────────────────────┤
+│ ...                                          │
+├─────────────────────────────────────────────┤
+│ Stored Topic Name #20         [35 bytes]    │
 └─────────────────────────────────────────────┘
 ```
 
@@ -405,7 +437,8 @@ broker.begin();
 ### Limitations
 
 ⚠️ Maximum 10 subscriptions per client (configurable via `MAX_STORED_SUBS_PER_CLIENT`)  
-⚠️ Only stores topic hashes, not topic names (client must track names)  
+⚠️ Maximum 20 topic names stored (configurable via `MAX_STORED_TOPIC_NAMES`)  
+⚠️ Topic names truncated to 32 characters (configurable via `MAX_TOPIC_NAME_LENGTH`)  
 ⚠️ Subscriptions persist even if client unregisters (use `clearStoredSubscriptions()` to clean up)
 
 ## Example: Storage Test
@@ -437,4 +470,4 @@ broker.listRegisteredClients([](uint8_t id, const String& sn, bool active) {
 
 ---
 
-**Key Point**: Flash storage makes your CAN network configuration **persistent and reliable**, with both client mappings and subscriptions surviving power cycles!
+**Key Point**: Flash storage makes your CAN network configuration **persistent and reliable**, with client mappings, subscriptions, **and topic names** surviving power cycles! Clients reconnecting after power loss will automatically have their subscriptions restored with the correct topic names.

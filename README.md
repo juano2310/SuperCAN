@@ -18,7 +18,7 @@ An enhanced Arduino library for CAN bus communication with built-in publish/subs
 - **⚡ Persistent ID Assignment** - Clients with serial numbers always get the same ID across reconnections
 - **🔄 Automatic Subscription Restoration** - Clients automatically restore subscriptions after power cycles
 - **Serial Number Registration** - Register clients using MAC addresses, chip IDs, or custom identifiers
-- **💾 Flash Memory Storage** - Client ID mappings and subscriptions survive power cycles (ESP32 NVS / Arduino EEPROM)
+- **💾 Flash Memory Storage** - Client ID mappings, subscriptions, and topic names survive power cycles (ESP32 NVS / Arduino EEPROM)
 - **Extended Frame Support** - Handles messages longer than 8 bytes automatically
 - **Callback-Based API** - Event-driven message handling
 - **Multiple Examples** - Ready-to-use broker, client, and sensor node examples
@@ -195,7 +195,7 @@ See the [arduino-CAN examples](https://github.com/sandeepmistry/arduino-CAN/tree
 ### Broker Capabilities
 - **Automatic client ID assignment** (sequential: 1, 2, 3, ... displayed in decimal)
 - **⚡ Persistent ID management** - Serial number-based client registration
-- **💾 Flash memory storage** - Mappings and subscriptions survive power loss and resets
+- **💾 Flash memory storage** - Mappings, subscriptions, and topic names survive power loss and resets
 - **🔄 Subscription restoration** - Automatically restores subscriptions when clients reconnect
 - Topic subscription management with topic name storage
 - Message routing to subscribers

@@ -24,6 +24,7 @@
   - ping           - Ping the broker
   - status         - Show connection status
   - serial         - Show serial number and ID
+  - topics         - List subscriptions
   
   Created 2025
   by Juan Pablo Risso
@@ -98,6 +99,7 @@ void setup() {
   
   Serial.println();
   Serial.println("Commands:");
+  Serial.println("  topics         - List subscriptions");
   Serial.println("  sub:topic      - Subscribe to topic");
   Serial.println("  unsub:topic    - Unsubscribe from topic");
   Serial.println("  pub:topic:msg  - Publish to topic");
@@ -106,7 +108,6 @@ void setup() {
   Serial.println("  ping           - Ping broker");
   Serial.println("  status         - Show connection status");
   Serial.println("  serial         - Show serial number and ID");
-  Serial.println("  list           - List subscriptions");
   Serial.println("─────────────────────────────────────────────────");
   Serial.println();
 }
@@ -216,7 +217,7 @@ void loop() {
     } else if (input == "serial") {
       showSerialInfo();
       
-    } else if (input == "list") {
+    } else if (input == "topics") {
       listSubscriptions();
       
     } else if (input.length() > 0) {

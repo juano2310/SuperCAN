@@ -121,10 +121,16 @@ client.onMessage([](uint16_t hash, const String& topic, const String& msg) {
 ### Client: Receive Direct Messages
 ```cpp
 client.onDirectMessage([](uint8_t senderId, const String& msg) {
-  Serial.print("From 0x");
-  Serial.print(senderId, HEX);
-  Serial.print(": ");
-  Serial.println(msg);
+  if (senderId == client.getClientId()) {
+    Serial.println("Self-message: " + msg);
+  } else if (senderId == 0) {
+    Serial.println("Broker: " + msg);
+  } else {
+    Serial.print("From peer 0x");
+    Serial.print(senderId, HEX);
+    Serial.print(": ");
+    Serial.println(msg);
+  }
 });
 ```
 
@@ -189,8 +195,18 @@ broker.broadcastMessage(hash, "System restart");
 
 ### Get Statistics
 ```cpp
-uint8_t clients = broker.getClientCount();
-uint8_t topics = broker.getSubscriptionCount();
+uint8_t registered = broker.getRegisteredClientCount(); // Total registered
+uint8_t online = broker.getClientCount();               // Currently online
+uint8_t topics = broker.getSubscriptionCount();         // Active topics
+
+// Check specific client
+if (broker.isClientOnline(5)) {
+  Serial.println("Client 5 is online");
+}
+
+// Get client's subscription count
+uint8_t subs = broker.getClientSubscriptionCount(5);
+Serial.print("Client has " + String(subs) + " subscriptions");
 ```
 
 ---
@@ -207,6 +223,7 @@ uint8_t topics = broker.getSubscriptionCount();
 | 0x06 | PING         | Client→Broker  | Connection check           |
 | 0x07 | PONG         | Broker→Client  | Ping response              |
 | 0x08 | ACK          | Bidirectional  | Acknowledgment             |
+| 0x09 | PEER_MSG     | Client↔Client  | Peer-to-peer message       |
 | 0xFF | ID_REQUEST   | Client→Broker  | Request client ID          |
 | 0xFE | ID_RESPONSE  | Broker→Client  | Assign client ID           |
 
@@ -358,31 +375,37 @@ CAN_L  →   CAN Bus L
 
 ### Client Methods
 ```cpp
-bool begin(timeout)           // Connect to broker
-void end()                    // Disconnect
-bool connect(timeout)         // Reconnect
-bool isConnected()            // Check connection
-uint8_t getClientId()         // Get assigned ID
-void loop()                   // Process messages
-bool subscribe(topic)         // Subscribe to topic
-bool unsubscribe(topic)       // Unsubscribe
-bool publish(topic, msg)      // Publish message
-bool sendDirectMessage(msg)   // Send to broker
-bool ping()                   // Ping broker
-bool isSubscribed(topic)      // Check subscription
-uint8_t getSubscriptionCount() // Get sub count
+bool begin(timeout)              // Connect to broker
+bool begin(serial, timeout)      // Connect with persistent ID
+void end()                       // Disconnect
+bool connect(timeout)            // Reconnect
+bool isConnected()               // Check connection
+uint8_t getClientId()            // Get assigned ID
+void loop()                      // Process messages
+bool subscribe(topic)            // Subscribe to topic
+bool unsubscribe(topic)          // Unsubscribe
+bool publish(topic, msg)         // Publish message
+bool sendDirectMessage(msg)      // Send to broker
+bool sendPeerMessage(id, msg)    // Send to peer client
+bool ping()                      // Ping broker
+unsigned long getLastPingTime()  // Get last RTT in ms
+bool isSubscribed(topic)         // Check subscription
+uint8_t getSubscriptionCount()   // Get sub count
 ```
 
 ### Broker Methods
 ```cpp
-bool begin()                  // Start broker
-void end()                    // Stop broker
-void loop()                   // Process messages
-void sendToClient(id, h, msg) // Send to client
-void sendDirectMessage(id, msg) // Direct to client
-void broadcastMessage(h, msg) // Broadcast topic
-uint8_t getClientCount()      // Get client count
-uint8_t getSubscriptionCount() // Get topic count
+bool begin()                     // Start broker
+void end()                       // Stop broker
+void loop()                      // Process messages
+void sendToClient(id, h, msg)    // Send to client
+void sendDirectMessage(id, msg)  // Direct to client
+void broadcastMessage(h, msg)    // Broadcast topic
+uint8_t getClientCount()         // Get online client count
+uint8_t getRegisteredClientCount() // Get registered count
+bool isClientOnline(id)          // Check if client online
+uint8_t getClientSubscriptionCount(id) // Get client's sub count
+uint8_t getSubscriptionCount()   // Get topic count
 ```
 
 ### Utility Functions

@@ -14,6 +14,16 @@ Added secure peer-to-peer messaging capability allowing registered clients with 
 - **Temporary IDs (101+)**: Cannot participate in peer messaging
 - Both sender and receiver validated by broker before forwarding
 
+### Deduplication
+- Prevents duplicate peer messages within 50ms window
+- Tracks last sender ID and message content
+- Automatic on both client and broker sides
+
+### Self-Message Detection
+- Clients can detect when they receive their own messages
+- Special handling in `onDirectMessage()` callback
+- Useful for testing and verification
+
 ### Architecture
 ```
 Client A (Permanent ID)  →  Broker (Validates & Forwards)  →  Client B (Permanent ID)
@@ -84,6 +94,19 @@ msg:2:hello    → Send peer message to client ID 2
 msg:5:data     → Send peer message to client ID 5
 ```
 
+**Self-Message Detection:**
+```cpp
+client.onDirectMessage([](uint8_t senderId, const String& msg) {
+  if (senderId == client.getClientId()) {
+    Serial.println("Received my own message!");  // Self-message
+  } else if (senderId == 0) {
+    Serial.println("From broker: " + msg);
+  } else {
+    Serial.println("From peer " + String(senderId) + ": " + msg);
+  }
+});
+```
+
 ## Key Benefits
 
 1. **Secure**: Only registered clients can participate
@@ -91,6 +114,8 @@ msg:5:data     → Send peer message to client ID 5
 3. **Flexible**: Supports standard and extended messages
 4. **Validated**: Broker ensures both endpoints have permanent IDs
 5. **Easy**: Simple API - just provide target ID and message
+6. **Reliable**: Automatic message deduplication within 50ms window
+7. **Smart**: Self-message detection for testing and verification
 
 ## Limitations
 
