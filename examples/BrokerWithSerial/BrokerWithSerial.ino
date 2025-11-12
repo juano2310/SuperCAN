@@ -103,6 +103,8 @@ void setup() {
   Serial.println("Commands:");
   Serial.println("  clients        - Show registered clients with online/offline status");
   Serial.println("  topics         - List subscribed topics");
+  Serial.println("  sub:topic      - Subscribe broker to topic");
+  Serial.println("  unsub:topic    - Unsubscribe broker from topic");
   Serial.println("  pub:topic:msg  - Publish to topic");
   Serial.println("  msg:id:msg     - Send direct message to client");
   Serial.println("  stats          - Show statistics");
@@ -136,6 +138,14 @@ void loop() {
       
     } else if (input == "stats") {
       showStats();
+      
+    } else if (input.startsWith("sub:")) {
+      String topic = input.substring(4);
+      subscribeBrokerToTopic(topic);
+      
+    } else if (input.startsWith("unsub:")) {
+      String topic = input.substring(6);
+      unsubscribeBrokerFromTopic(topic);
       
     } else if (input.startsWith("pub:")) {
       int colonPos = input.indexOf(':', 4);
@@ -334,8 +344,8 @@ void listTopics() {
     return;
   }
   
-  Serial.println("Topic Name                     Hash      Subscribers");
-  Serial.println("────────────────────────────────────────────────────");
+  Serial.println("Topic Name                      Hash      Subscribers   Broker");
+  Serial.println("──────────────────────────────────────────────────────────────");
   
   broker.listSubscribedTopics([](uint16_t hash, const String& name, uint8_t count) {
     // Print topic name (pad to 32 chars)
@@ -352,11 +362,29 @@ void listTopics() {
     Serial.print(hash, HEX);
     Serial.print("    ");
     
-    // Print subscriber count
-    Serial.println(count);
+    // Print subscriber count (pad to 12 chars)
+    Serial.print(count);
+    for (int i = String(count).length(); i < 12; i++) {
+      Serial.print(" ");
+    }
+    
+    // Check if broker (ID 0) is subscribed to this topic
+    uint8_t subscribers[MAX_SUBSCRIBERS_PER_TOPIC];
+    uint8_t subCount = 0;
+    broker.getSubscribers(hash, subscribers, &subCount);
+    
+    bool brokerSubscribed = false;
+    for (uint8_t i = 0; i < subCount; i++) {
+      if (subscribers[i] == CAN_PS_BROKER_ID) {
+        brokerSubscribed = true;
+        break;
+      }
+    }
+    
+    Serial.println(brokerSubscribed ? "  Yes" : "  No");
   });
   
-  Serial.println("────────────────────────────────────────────────────");
+  Serial.println("─────────────────────────────────────────────────────────────");
   Serial.print("Total topics: ");
   Serial.println(broker.getSubscriptionCount());
   Serial.println();
@@ -528,4 +556,37 @@ void clearAllMappings() {
   } else {
     Serial.println("✗ Timeout - operation cancelled");
   }
+}
+
+// Subscribe broker to a topic
+void subscribeBrokerToTopic(const String& topic) {
+  uint16_t topicHash = CANPubSubBase::hashTopic(topic);
+  broker.registerTopic(topic);
+  
+  // Send subscribe message as if broker is subscribing
+  CAN.beginPacket(CAN_PS_SUBSCRIBE);
+  CAN.write(CAN_PS_BROKER_ID);  // Broker ID is 0
+  CAN.write(topicHash >> 8);
+  CAN.write(topicHash & 0xFF);
+  CAN.endPacket();
+  
+  Serial.print("Broker subscribed to [");
+  Serial.print(topic);
+  Serial.println("]");
+}
+
+// Unsubscribe broker from a topic
+void unsubscribeBrokerFromTopic(const String& topic) {
+  uint16_t topicHash = CANPubSubBase::hashTopic(topic);
+  
+  // Send unsubscribe message as if broker is unsubscribing
+  CAN.beginPacket(CAN_PS_UNSUBSCRIBE);
+  CAN.write(CAN_PS_BROKER_ID);  // Broker ID is 0
+  CAN.write(topicHash >> 8);
+  CAN.write(topicHash & 0xFF);
+  CAN.endPacket();
+  
+  Serial.print("Broker unsubscribed from [");
+  Serial.print(topic);
+  Serial.println("]");
 }
