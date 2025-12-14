@@ -1158,13 +1158,38 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       // Extended ID request with serial number
       // Note: A placeholder byte (0x00) was extracted by processExtendedFrame as "senderId"
       // The actual serial number is in the data buffer
+      
+      if (length == 0) {
+        return;
+      }
+      
+      #ifdef CAN_PS_USE_CHECKSUM
+      // Validate checksum (last byte)
+      if (length < 2) {
+        return;
+      }
+      
+      uint8_t receivedChecksum = data[length - 1];
+      uint8_t calculatedChecksum = calculateCRC8(data, length - 1);
+      
+      if (receivedChecksum != calculatedChecksum) {
+        // Checksum mismatch - silently reject corrupted message
+        return;
+      }
+      
+      // Extract serial number (exclude checksum byte)
+      String serialNumber = "";
+      for (size_t i = 0; i < length - 1; i++) {
+        serialNumber += (char)data[i];
+      }
+      #else
       String serialNumber = "";
       for (size_t i = 0; i < length; i++) {
         serialNumber += (char)data[i];
       }
+      #endif
       
       if (serialNumber.length() == 0) {
-        // No serial number provided - reject by not sending a response
         return;
       }
       
