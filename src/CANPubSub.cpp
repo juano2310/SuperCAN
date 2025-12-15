@@ -3,6 +3,29 @@
 
 #include "CANPubSub.h"
 
+// ===== Message Validation Helpers =====
+
+// Calculate CRC8 checksum for data integrity
+static uint8_t calculateCRC8(const uint8_t* data, size_t length) {
+  uint8_t crc = 0x00;
+  for (size_t i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (uint8_t j = 0; j < 8; j++) {
+      if (crc & 0x80) {
+        crc = (crc << 1) ^ 0x07;  // CRC8-CCITT polynomial
+      } else {
+        crc <<= 1;
+      }
+    }
+  }
+  return crc;
+}
+
+// Validate message length is reasonable
+static bool isValidMessageLength(size_t length, size_t expectedMin, size_t expectedMax) {
+  return (length >= expectedMin && length <= expectedMax);
+}
+
 // ===== CANPubSubBase Implementation =====
 
 CANPubSubBase::CANPubSubBase(CANControllerClass& can) : _can(&can), _topicMappingCount(0) {
@@ -149,7 +172,8 @@ CANPubSubBroker::CANPubSubBroker(CANControllerClass& can)
     _onClientConnect(nullptr),
     _onClientDisconnect(nullptr),
     _onPublish(nullptr),
-    _onDirectMessage(nullptr) {
+    _onDirectMessage(nullptr),
+    _onValidateRegistration(nullptr) {
   memset(_subscriptions, 0, sizeof(_subscriptions));
   memset(_connectedClients, 0, sizeof(_connectedClients));
   memset(_clientMappings, 0, sizeof(_clientMappings));
@@ -642,6 +666,10 @@ void CANPubSubBroker::onDirectMessage(DirectMessageCallback callback) {
   _onDirectMessage = callback;
 }
 
+void CANPubSubBroker::onValidateRegistration(RegistrationValidationCallback callback) {
+  _onValidateRegistration = callback;
+}
+
 void CANPubSubBroker::setPingInterval(unsigned long intervalMs) {
   _pingInterval = intervalMs;
   savePingConfigToStorage();
@@ -841,15 +869,51 @@ void CANPubSubBroker::listSubscribedTopics(std::function<void(uint16_t hash, con
 // ===== Client ID Mapping Methods =====
 
 void CANPubSubBroker::handleIdRequestWithSerial() {
-  // Read serial number from CAN message
-  String serialNumber = "";
-  while (_can->available()) {
-    serialNumber += (char)_can->read();
+  // Read message data into buffer for validation
+  uint8_t buffer[MAX_SERIAL_LENGTH + 1];  // +1 for checksum
+  size_t bytesRead = 0;
+  
+  while (_can->available() && bytesRead < sizeof(buffer)) {
+    buffer[bytesRead++] = _can->read();
   }
   
-  if (serialNumber.length() == 0) {
-    // No serial number provided - assign temporary ID (not saved to storage)
+  if (bytesRead == 0) {
+    // No data provided - assign temporary ID (not saved to storage)
     assignClientID();
+    return;
+  }
+  
+  #ifdef CAN_PS_USE_CHECKSUM
+  // Validate checksum if enabled (last byte is checksum)
+  if (bytesRead < 2) {
+    // Message too short (need at least 1 byte data + 1 byte checksum)
+    return; // Reject invalid message
+  }
+  
+  uint8_t receivedChecksum = buffer[bytesRead - 1];
+  uint8_t calculatedChecksum = calculateCRC8(buffer, bytesRead - 1);
+  
+  if (receivedChecksum != calculatedChecksum) {
+    // Checksum mismatch - message corrupted, reject silently
+    return;
+  }
+  
+  // Extract serial number (exclude checksum byte)
+  String serialNumber = "";
+  for (size_t i = 0; i < bytesRead - 1; i++) {
+    serialNumber += (char)buffer[i];
+  }
+  #else
+  // No checksum validation - use all bytes as serial number
+  String serialNumber = "";
+  for (size_t i = 0; i < bytesRead; i++) {
+    serialNumber += (char)buffer[i];
+  }
+  #endif
+  
+  // Validate serial number length is reasonable
+  if (!isValidMessageLength(serialNumber.length(), 1, MAX_SERIAL_LENGTH)) {
+    // Invalid length - reject
     return;
   }
   
@@ -893,6 +957,14 @@ void CANPubSubBroker::handleIdRequestWithSerial() {
 }
 
 uint8_t CANPubSubBroker::findOrCreateClientId(const String& serialNumber) {
+  // Validate serial number using callback if set
+  if (_onValidateRegistration != nullptr) {
+    if (!_onValidateRegistration(serialNumber)) {
+      // Validation failed - reject registration
+      return CAN_PS_UNASSIGNED_ID;
+    }
+  }
+  
   // Check if this serial number already has an ID
   int index = findClientMapping(serialNumber);
   
@@ -911,15 +983,36 @@ uint8_t CANPubSubBroker::findOrCreateClientId(const String& serialNumber) {
   
   // No existing mapping, create a new one
   if (_mappingCount < MAX_CLIENT_MAPPINGS) {
-    _clientMappings[_mappingCount].clientId = _nextClientID;
+    // Find smallest available ID (starting from 1)
+    uint8_t assignedId = 1;
+    bool idFound = false;
+    
+    for (uint8_t candidateId = 1; candidateId < 0xFF && !idFound; candidateId++) {
+      bool idInUse = false;
+      for (uint8_t i = 0; i < _mappingCount; i++) {
+        if (_clientMappings[i].clientId == candidateId) {
+          idInUse = true;
+          break;
+        }
+      }
+      if (!idInUse) {
+        assignedId = candidateId;
+        idFound = true;
+      }
+    }
+    
+    if (!idFound) {
+      // All IDs in use
+      return CAN_PS_UNASSIGNED_ID;
+    }
+    
+    _clientMappings[_mappingCount].clientId = assignedId;
     _clientMappings[_mappingCount].setSerial(serialNumber);
     _clientMappings[_mappingCount].registered = true;
     _mappingCount++;
     
-    uint8_t assignedId = _nextClientID;
-    
-    // Increment for next client
-    _nextClientID++;
+    // Update _nextClientID for tracking
+    _nextClientID = assignedId + 1;
     if (_nextClientID == 0xFF) {
       _nextClientID = 0x01; // Wrap around, skip special IDs
     }
@@ -1065,13 +1158,38 @@ void CANPubSubBroker::onExtendedMessageComplete(uint8_t msgType, uint8_t senderI
       // Extended ID request with serial number
       // Note: A placeholder byte (0x00) was extracted by processExtendedFrame as "senderId"
       // The actual serial number is in the data buffer
+      
+      if (length == 0) {
+        return;
+      }
+      
+      #ifdef CAN_PS_USE_CHECKSUM
+      // Validate checksum (last byte)
+      if (length < 2) {
+        return;
+      }
+      
+      uint8_t receivedChecksum = data[length - 1];
+      uint8_t calculatedChecksum = calculateCRC8(data, length - 1);
+      
+      if (receivedChecksum != calculatedChecksum) {
+        // Checksum mismatch - silently reject corrupted message
+        return;
+      }
+      
+      // Extract serial number (exclude checksum byte)
+      String serialNumber = "";
+      for (size_t i = 0; i < length - 1; i++) {
+        serialNumber += (char)data[i];
+      }
+      #else
       String serialNumber = "";
       for (size_t i = 0; i < length; i++) {
         serialNumber += (char)data[i];
       }
+      #endif
       
       if (serialNumber.length() == 0) {
-        // No serial number provided - reject by not sending a response
         return;
       }
       
@@ -1635,7 +1753,26 @@ void CANPubSubClient::requestClientID() {
 }
 
 void CANPubSubClient::requestClientIDWithSerial(const String& serialNumber) {
-  // Use extended message for serial numbers > 8 bytes
+  #ifdef CAN_PS_USE_CHECKSUM
+  // Calculate checksum for the serial number
+  uint8_t checksum = calculateCRC8((const uint8_t*)serialNumber.c_str(), serialNumber.length());
+  
+  // Use extended message for serial numbers > 7 bytes (8 - 1 for checksum)
+  if (serialNumber.length() > (CAN_FRAME_DATA_SIZE - 1)) {
+    // Prepend a dummy byte (0x00) since processExtendedFrame will extract first byte as "senderId"
+    uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
+    buffer[0] = 0x00; // Placeholder for "senderId" field
+    memcpy(buffer + 1, serialNumber.c_str(), min(serialNumber.length(), (size_t)(MAX_EXTENDED_MSG_SIZE - 2)));
+    buffer[1 + serialNumber.length()] = checksum;  // Append checksum
+    sendExtendedMessage(CAN_PS_ID_REQUEST, buffer, min(1 + serialNumber.length() + 1, (size_t)MAX_EXTENDED_MSG_SIZE));
+  } else {
+    _can->beginPacket(CAN_PS_ID_REQUEST);
+    _can->print(serialNumber);
+    _can->write(checksum);  // Append checksum
+    _can->endPacket();
+  }
+  #else
+  // No checksum - send serial number as-is (backward compatibility)
   if (serialNumber.length() > CAN_FRAME_DATA_SIZE) {
     // Prepend a dummy byte (0x00) since processExtendedFrame will extract first byte as "senderId"
     uint8_t buffer[MAX_EXTENDED_MSG_SIZE];
@@ -1647,6 +1784,7 @@ void CANPubSubClient::requestClientIDWithSerial(const String& serialNumber) {
     _can->print(serialNumber);
     _can->endPacket();
   }
+  #endif
 }
 
 bool CANPubSubClient::subscribe(const String& topic) {

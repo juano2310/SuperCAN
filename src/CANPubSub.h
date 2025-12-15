@@ -44,6 +44,9 @@
 #define MAX_EXTENDED_MSG_SIZE   128 // Maximum size for extended messages
 #define EXTENDED_MSG_TIMEOUT    1000 // Timeout for multi-frame messages (ms)
 
+// Message validation
+#define CAN_PS_USE_CHECKSUM     1   // Enable checksum validation for ID_REQUEST messages
+
 // Forward declarations
 class CANPubSubBroker;
 class CANPubSubClient;
@@ -63,6 +66,7 @@ struct ExtendedMessageBuffer {
 typedef void (*MessageCallback)(uint16_t topicHash, const String& topic, const String& message);
 typedef void (*DirectMessageCallback)(uint8_t senderId, const String& message);
 typedef void (*ConnectionCallback)(uint8_t clientId);
+typedef bool (*RegistrationValidationCallback)(const String& serialNumber); // Returns false to reject registration
 
 // Subscription structure for broker
 struct Subscription {
@@ -182,6 +186,7 @@ public:
   void onClientDisconnect(ConnectionCallback callback);
   void onPublish(MessageCallback callback);
   void onDirectMessage(DirectMessageCallback callback);
+  void onValidateRegistration(RegistrationValidationCallback callback); // Validate serial before registration
   
   // Connection monitoring
   void setPingInterval(unsigned long intervalMs);
@@ -321,6 +326,7 @@ private:
   ConnectionCallback _onClientDisconnect;
   MessageCallback _onPublish;
   DirectMessageCallback _onDirectMessage;
+  RegistrationValidationCallback _onValidateRegistration;
 };
 
 // Pub/Sub Client class
